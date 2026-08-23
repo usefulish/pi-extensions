@@ -1,11 +1,7 @@
 ---
 name: general-purpose
 description: General-purpose sub-agent for any delegated task. Use when no specialized agent fits. Good for complex research, multi-step operations, and code modifications.
-models:
-  - zai-coding-cn/glm-5.1
-  - nvidia/mistralai/mistral-small-4-119b-2603
-  - openrouter/nvidia/nemotron-3-super-120b-a12b:free
-  - opencode-go/deepseek-v4-flash
+model: "@coder"
 thinking: medium
 color: yellow
 ---

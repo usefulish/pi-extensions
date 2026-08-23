@@ -2,6 +2,42 @@
 
 Isolated in-process subagents for Pi. The `subagent` tool supports single, parallel (8 tasks, 4 concurrent), and chained execution; `/agent` opens inspectable child threads. A live progress widget shows running tasks above the editor; `background: true` runs detached with follow-up-turn completion.
 
+## Role-based model routing
+
+Models are selected **by function**, not fixed per agent. A *role* maps a
+function (`fast`, `coder`, `smart`, or your own) to an ordered fallback chain
+in `~/.pi/agent/settings.json` under `subagent.roles`:
+
+```json
+{
+  "subagent": {
+    "roles": {
+      "fast": ["zai-coding-cn/glm-5-turbo", "nvidia/openai/gpt-oss-20b", "opencode-go/deepseek-v4-flash"],
+      "coder": "zai-coding-cn/glm-5.1, opencode-go/deepseek-v4-flash",
+      "smart": "*"
+    },
+    "agentModels": { "reviewer": "@smart:high" }
+  }
+}
+```
+
+- Bundled agents reference roles in frontmatter (`model: "@fast"`) — remap a
+  function once and every agent using it follows.
+- Role values: string (comma chain) or array. `*` / `@default` = parent model.
+- A trailing `:level` (`off|minimal|low|medium|high|xhigh|max`) on any entry
+  overrides the agent's thinking for that match (`"@smart:high"`); openrouter
+  `:free` ids are left intact.
+- `subagent.agentModels` overrides a single agent's models without editing its
+  file. Repo `.pi/settings.json` overlays the global mapping when the project
+  is trusted (read-only; saves go to the global file).
+- Without any settings, bundled defaults reproduce today's chains exactly.
+
+`/subagent` opens the interactive role editor (TUI panel via the shared
+`@bacnh85/pi-config-panel` kernel; prints the effective mapping headless).
+`/subagent list` lists agents, `/subagent <name>` shows an agent's resolved
+chain, and `/subagent @role` (or `/subagent fast`) shows a role's chain and
+the agents using it.
+
 ## Live progress widget
 
 When subagents run, a persistent widget appears above the editor showing each
@@ -45,14 +81,16 @@ Requires Node.js >= 20.18.
 
 ## Bundled roles
 
-| Role | Ordered model preferences | Thinking | Tools |
+| Role | Model role | Thinking | Tools |
 | --- | --- | --- | --- |
-| `scout` | `zai-coding-cn/glm-5-turbo` → `nvidia/openai/gpt-oss-20b` → `opencode-go/deepseek-v4-flash` | off | read, grep, find, ls |
-| `tester` | `zai-coding-cn/glm-5-turbo` → `nvidia/openai/gpt-oss-20b` → `opencode-go/deepseek-v4-flash` | off | read, bash, grep, find, ls |
-| `worker` | `zai-coding-cn/glm-5.1` → `nvidia/mistralai/mistral-small-4-119b-2603` → `openrouter/nvidia/nemotron-3-super-120b-a12b:free` → `opencode-go/deepseek-v4-flash` | medium | **inherits all parent tools** |
-| `general-purpose` | `zai-coding-cn/glm-5.1` → `nvidia/mistralai/mistral-small-4-119b-2603` → `openrouter/nvidia/nemotron-3-super-120b-a12b:free` → `opencode-go/deepseek-v4-flash` | medium | **inherits all parent tools** |
-| `planner` | `zai-coding-cn/glm-5.2` → `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` → `opencode-go/deepseek-v4-pro` | high | read, grep, find, ls |
-| `reviewer` | `zai-coding-cn/glm-5.2` → `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` → `opencode-go/deepseek-v4-pro` | high | read, grep, find, ls |
+| `scout` | `@fast` | off | read, grep, find, ls |
+| `tester` | `@fast` | off | read, bash, grep, find, ls |
+| `worker` | `@coder` | medium | **inherits all parent tools** |
+| `general-purpose` | `@coder` | medium | **inherits all parent tools** |
+| `planner` | `@smart` | high | read, grep, find, ls |
+| `reviewer` | `@smart` | high | read, grep, find, ls |
+
+Default role chains (overridable via `subagent.roles` in settings.json — see above):
 
 Each role uses the first authenticated preference available through Pi's model registry, then falls back to the authenticated parent model. Chains are **free-first** to conserve the metered opencode-go budget: **zai-coding-cn** (free GLM, primary) → free **nvidia** NIM and **openrouter** `:free` models → **opencode-go** (paid DeepSeek, last resort — one per role: `deepseek-v4-flash` for fast/strong-coding, `deepseek-v4-pro` for deep reasoning). opencode-go's GLM models cost ~$1.40/$4.40 per M versus zai-coding-cn's free GLM, so GLM stays on zai-coding-cn. Fallback models were live-verified on 2026-07-24; `nvidia/moonshotai/kimi-k2.6` and `nvidia/z-ai/glm-5.2` return 404/timeout on the user's account and were removed — non-rate-limit failures kill the subagent instead of advancing the chain. User/project agent files remain stronger overrides and may set legacy `model`, ordered `models`, and `thinking`.
 
@@ -211,7 +249,8 @@ The raw `stopReason` from the Pi SDK is preserved in the result.
 
 ## Timeout and cancellation
 
-- **Default timeout:** 10 minutes per child.
+- **Default inactivity window:** 3 minutes per child (`PI_SUBAGENT_INACTIVITY_TIMEOUT_MINS`, range 1–60).
+- **Absolute cap:** 20 minutes per child, even when active (`PI_SUBAGENT_HARD_TIMEOUT_MINS`, range 1–60). See *Timeouts* above.
 - **Per-task/step override:** Use `timeout` in task/step params.
 - **Parent cancellation:** Aborting the parent tool call cancels all children.
 - **Sibling cancellation:** In parallel mode with `abortOnFailure: true`, the first failed task cancels running siblings.
@@ -229,10 +268,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Compatibility
 
-- Requires `@earendil-works/pi-coding-agent >=0.80.0 <0.83.0`
-- Requires `@earendil-works/pi-ai >=0.80.0 <0.83.0`
-- Requires `@earendil-works/pi-agent-core >=0.80.0 <0.83.0`
-- Requires `@earendil-works/pi-tui >=0.80.0 <0.83.0`
+- Requires `@earendil-works/pi-coding-agent >=0.80.0 <0.85.0`
+- Requires `@earendil-works/pi-ai >=0.80.0 <0.85.0`
+- Requires `@earendil-works/pi-agent-core >=0.80.0 <0.85.0`
+- Requires `@earendil-works/pi-tui >=0.80.0 <0.85.0`
 - Requires `typebox >=1.3.0 <2.0.0`
 - Requires Node.js >= 20.18
 

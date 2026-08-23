@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.16.0 (2026-08-23)
+
+### Features
+
+- **Role-based model routing** — select models by *function* instead of fixed
+  per-agent chains, inspired by oh-my-pi's `modelRoles`. Roles (`@fast`,
+  `@coder`, `@smart`, or custom) map functions to ordered fallback chains via
+  `subagent.roles` in `~/.pi/agent/settings.json`; bundled agents now reference
+  roles instead of hardcoding chains. Without settings, defaults reproduce the
+  previous chains exactly.
+- `subagent.agentModels` per-agent overrides — remap a bundled agent's models
+  (e.g. `{ "reviewer": "@smart:high" }`) without editing its file. Repo
+  `.pi/settings.json` overlays the mapping for trusted projects (read-only).
+- `:thinking` suffix support on any role/model entry (`"@smart:high"`);
+  openrouter `:free` ids are preserved.
+- `/subagent roles` — interactive role editor (TUI panel via the shared
+  `@bacnh85/pi-config-panel` kernel, saves to global settings.json) or plain
+  text mapping in headless mode.
+- Bare `/subagent` now opens the roles view directly (the agent list moved to
+  `/subagent list`); `/subagent <role>` / `/subagent @role` shows a role's
+  chain, default, and the agents using it instead of erroring.
+- `/subagent <name>` and the system-prompt catalog now show each agent's
+  *resolved* chain (role → models → parent fallback) plus unresolved-role
+  warnings.
+
 ## 0.15.3 (2026-08-20)
  ### Improvements
 - Timeouts have been extracted as Environment Variables enabling overriding.

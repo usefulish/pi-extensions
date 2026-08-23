@@ -19,9 +19,9 @@ Project agents override user agents with the same name when `agentScope: "both"`
 name: my-agent          # Required. Unique identifier (kebab-case).
 description: ...        # Required. When to use this agent.
 tools: read, grep, ...    # Optional. Comma-separated tool names. Defaults to all.
-model: provider/model     # Optional explicit first choice (legacy compatible).
+model: "@fast"           # Optional. Role alias (quoted — @ is YAML-reserved) or provider/model.
 models:                   # Optional ordered fallbacks; comma form also accepted.
-  - provider/fast-model
+  - "@fast"
   - provider/backup-model
 thinking: low             # Optional: off|minimal|low|medium|high|xhigh|max.
 sandbox: read-only        # Optional: read-only | workspace-write | worktree. Auto-derives tool restrictions.
@@ -29,9 +29,18 @@ color: cyan               # Optional: red|blue|green|yellow|purple|orange|pink|c
 ---
 ```
 
+### Model roles
+
+`model`/`models` entries may reference *roles* instead of concrete models:
+`"@fast"`, `"@coder"`, `"@smart"`, or any role defined under
+`subagent.roles` in `~/.pi/agent/settings.json`. A role expands to an ordered
+fallback chain (string with commas, or array). `"*"` / `"@default"` mean
+"use the parent model". A trailing `:level` (`"@smart:high"`) overrides the
+agent's `thinking` for that match. See README → *Role-based model routing*.
+
 ### `sandbox`
 
-- `read-only`: Restricts tools to `read`, `grep`, `find`, `ls`. Overrides any `tools` field.
+- `read-only`: Restricts tools to the read-only allowlist (`read`, `grep`, `find`, `ls` plus read-only extension tools when inherited — `web_*`, `serena_*`, `munin_*`, `fff*`, …). Overrides any `tools` field.
 - `workspace-write` (default): Uses the agent's `tools` list or defaults to all tools.
 - `worktree`: Runs the agent in an isolated git worktree (`.pi-worktrees/<id>` under the repo root). All file mutations land in the worktree; the main checkout is untouched. On completion, a unified diff of the changes is returned in the result (visible in the thread viewer as a `🌿 worktree` badge) — the parent merges explicitly via `apply_patch`/cherry-pick; nothing is applied automatically. Falls back to in-process execution when the cwd is not a git repo (with a warning). Requires git.
 
@@ -60,9 +69,16 @@ The `subagent` tool is always rejected to prevent recursive delegation.
 Unknown or misspelled tool names produce a clear error.
 Duplicate names are deduplicated automatically.
 
-Custom/extension tools are NOT available to sub-agents by default (each runs in an isolated in-memory session with no extensions).
+**Tool inheritance:** an agent WITHOUT an explicit `tools:` line inherits every
+tool the parent session has (minus `subagent`), including extension tools like
+`web_search`, `serena_*`, `munin_*`, `obsidian`, and `notebooklm`, and runs with
+the parent's extensions loaded. An agent WITH an explicit `tools:` list is
+validated against built-ins ∪ the inherited set and, when the list contains
+only built-ins, runs in a lean loader with no extensions/skills loaded. To
+force an inheriting agent lean, set `tools: read, bash, edit, write, grep, find, ls`.
 
-Read-only service execution (used by `pi-review`) restricts tools to the read-only category.
+Read-only service execution (used by `pi-review`) restricts tools to the
+read-only allowlist (including read-only extension tools when inherited).
 
 ## Model Resolution
 
@@ -86,7 +102,7 @@ Children do not automatically load repository instructions. Callers may pass an 
 Each sub-agent runs with:
 - **System prompt**: agent body only (~200-1K tokens typical)
 - **No AGENTS.md**: saves 500-5K tokens
-- **No extensions/skills loaded**: saves 200-1K tokens
+- **No extensions/skills loaded**: saves 200-1K tokens — but only for agents whose effective tool set is built-in only (explicit `tools:` line). Agents that inherit parent tools load the parent's extensions into the child (higher token cost, full toolset).
 - **Thinking per role**: defaults off; bundled scout/reviewer/worker choose low/high/medium
 - **No compaction**: avoids compaction token cost
 

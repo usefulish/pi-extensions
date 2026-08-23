@@ -2,10 +2,7 @@
 name: tester
 description: Focused verification agent. Use for cheap routine test, typecheck, lint, build, and regression checks without editing files.
 tools: read, bash, grep, find, ls
-models:
-  - zai-coding-cn/glm-5-turbo
-  - nvidia/openai/gpt-oss-20b
-  - opencode-go/deepseek-v4-flash
+model: "@fast"
 thinking: off
 color: orange
 ---

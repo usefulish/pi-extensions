@@ -60,13 +60,15 @@ import {
 } from "./render.ts";
 import { type SubagentThread, threadStore } from "./threads.ts";
 import { SUBAGENT_REQUEST_EVENT, runNamedAgent, type SubagentRunRequest } from "./service.ts";
-import { resolveModel } from "./model.ts";
+import { resolveModel, runWithModelFallback } from "./model.ts";
+import { DEFAULT_ROLES, describeAgentModels, readSubagentRoles, readSubagentRolesGlobal, resolveAgentModelChain, type RolesConfig } from "./roles.ts";
 import { ThreadViewer, type ThreadViewerCallbacks } from "./thread-viewer.ts";
 import { createTaskWidgetController, renderLiveThreadLine, type TaskWidgetController } from "./widget.ts";
 import {
   startBackgroundTask,
   cancelBackgroundTask,
   getBackgroundTask,
+  getAllBackgroundTasks,
   snapshotTask,
   clearBackgroundTasks,
 } from "./background.ts";
@@ -193,10 +195,13 @@ export default function (pi: ExtensionAPI) {
     trustedProjectAgentDirs.clear();
     // Clear any widget from a prior session.
     widget.clearWidgetIfIdle();
-    // Mark prior-session running tasks as interrupted (we can't resume them).
+    // Mark prior-session running tasks as interrupted (we can't resume them),
+    // but keep entries for background tasks still live in this process — only
+    // shutdown aborts them, so a session reload must not mislabel them.
     // ponytail: honest about the in-process ceiling — no live-session resume.
     try {
-      markInterruptedOnRestart(path.join(ctx.cwd, CONFIG_DIR_NAME));
+      const liveBgIds = new Set(getAllBackgroundTasks().map((t) => t.id));
+      markInterruptedOnRestart(path.join(ctx.cwd, CONFIG_DIR_NAME), liveBgIds);
     } catch { /* history file not writable — non-fatal */ }
   });
 
@@ -213,12 +218,17 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event) => {
     const ctx = currentCtx;
     const discovery = discoverAgents(ctx?.cwd ?? process.cwd(), "both", bundledAgentsDir);
-    const catalog = discovery.agents
+    const projectTrusted = ctx?.isProjectTrusted?.() ?? false;
+    // Security: project agents are repo-controlled (untrusted until the user
+    // approves them). Never let their description text reach the parent's
+    // system prompt unless the project is trusted — same gate as AGENTS.md.
+    const catalogAgents = discovery.agents.filter(
+      (agent) => projectTrusted || agent.source !== "project",
+    );
+    const rolesCfg = readSubagentRoles(ctx);
+    const catalog = catalogAgents
       .map((agent) => {
-        const candidates = getModelCandidates(agent);
-        const modelInfo = candidates.length > 0
-          ? ` (models: ${candidates.join(" → ")} → parent fallback)`
-          : " (parent fallback)";
+        const modelInfo = ` (models: ${describeAgentModels(agent, rolesCfg)})`;
         const thinkingInfo = agent.thinking ? `, thinking: ${agent.thinking}` : "";
         const sandboxInfo = agent.sandbox ? `, sandbox: ${agent.sandbox}` : "";
         // ponytail: one-line inheritance hint; the model picks agents by description, this just sets expectations.
@@ -263,6 +273,7 @@ export default function (pi: ExtensionAPI) {
       instructions: request.instructions,
       signal: request.signal,
       readOnly: request.readOnly,
+      allowExternalCwd: getTrustedConfig(ctx).allowExternalCwd,
       onMessage: (result) => threadStore.updateThread(thread.id, { result }),
       onProgress: (progress) => { threadStore.updateProgress(thread.id, progress); request.onProgress?.(progress); },
     }).then((result) => {
@@ -317,7 +328,7 @@ export default function (pi: ExtensionAPI) {
     return container;
   });
   pi.registerCommand("subagent", {
-    description: "List available sub-agents, reload agent definitions, or show agent details",
+    description: "Configure model roles (/subagent), list agents (/subagent list), agent details (/subagent <name>), role detail (/subagent @role), reload definitions (/subagent reload), history (/subagent history)",
     handler: async (args, ctx) => {
       const cmd = args.trim().toLowerCase();
       const discovery = discoverAgents(ctx.cwd, "both", bundledAgentsDir);
@@ -351,6 +362,61 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
+      const openRolesEditor = async (): Promise<void> => {
+        // Role mapping editor: panel in TUI, plain text otherwise.
+        const [{ openConfigPanel }, { buildRows, buildRolesPanelCfg, cfgToPatch, preserveUnknownAgentModels, writeSubagentSection }] = await Promise.all([
+          import("@bacnh85/pi-config-panel"),
+          import("./roles-panel.ts"),
+        ]);
+        if (ctx.mode !== "tui" || !ctx.hasUI) {
+          const rolesCfg = readSubagentRoles(ctx);
+          const lines = discovery.agents.map((a) => `  ${a.name.padEnd(16)} ${describeAgentModels(a, rolesCfg)}`);
+          pi.sendMessage({
+            customType: "pi-subagent",
+            content: [
+              "Model roles (edit ~/.pi/agent/settings.json → subagent.roles, or run /subagent in a TUI):",
+              ...Object.entries(rolesCfg.roles).map(([name, chain]) =>
+                `  @${name} = ${Array.isArray(chain) ? chain.join(", ") : chain}`),
+              "",
+              "Effective models per agent:",
+              ...lines,
+            ].join("\n"),
+            display: true,
+          });
+          return;
+        }
+        const current = readSubagentRolesGlobal();
+        const working = buildRolesPanelCfg(discovery.agents, current);
+        await openConfigPanel({
+          ctx,
+          cfg: working,
+          build: (cfg) => buildRows(cfg, discovery.agents),
+          title: "Subagent model roles",
+          onSave: (saved, editedKeys) => {
+            if (!(saved && editedKeys && editedKeys.size > 0)) return;
+            const patch = cfgToPatch(working);
+            patch.agentModels = preserveUnknownAgentModels(
+              patch.agentModels,
+              discovery.agents.map((a) => a.name),
+              current.agentModels,
+            );
+            try {
+              writeSubagentSection(patch);
+              invalidateAgentCache();
+              ctx.ui.notify("Model roles saved to settings.json", "info");
+            } catch (err) {
+              ctx.ui.notify(`Not saved — ${err instanceof Error ? err.message : String(err)}`, "error");
+            }
+          },
+        });
+        return;
+      };
+
+      if (cmd === "roles") {
+        await openRolesEditor();
+        return;
+      }
+
       if (cmd === "reload" || cmd === "refresh") {
         invalidateAgentCache();
         const fresh = discoverAgents(ctx.cwd, "both", bundledAgentsDir);
@@ -379,28 +445,61 @@ export default function (pi: ExtensionAPI) {
           : "";
         pi.sendMessage({
           customType: "pi-subagent",
-          content: `Available agents (${discovery.agents.length}):\n  ${list.text}${extra}${diagText}\n\nScopes searched:\n  user: ${path.join(getAgentDir(), "agents")}${dirs}\n  bundled: ${bundledAgentsDir}\n\nUse /subagent <name> for agent details, /subagent reload to refresh.`,
+          content: `Available agents (${discovery.agents.length}):\n  ${list.text}${extra}${diagText}\n\nScopes searched:\n  user: ${path.join(getAgentDir(), "agents")}${dirs}\n  bundled: ${bundledAgentsDir}\n\nUse /subagent <name> for agent details, /subagent @role for role detail, /subagent reload to refresh.`,
           display: true,
         });
         return;
       }
 
       if (cmd) {
-        // Show details for a specific agent
+        // Show details for a specific agent; fall back to a role detail view
+        // when the name matches a model role (e.g. "/subagent coder").
         const agent = discovery.agents.find(
           (a) => a.name.toLowerCase() === cmd,
         );
         if (!agent) {
-          ctx.ui.notify(`Unknown agent: "${args.trim()}". Use /subagent to list all.`, "error");
+          const rolesCfg = readSubagentRoles(ctx);
+          const arg = args.trim().toLowerCase();
+          const roleName = arg.startsWith("@") ? arg.slice(1) : arg;
+          // Resolve the role key case-insensitively (role names are free-form).
+          const roleKey = Object.keys(rolesCfg.roles).find((k) => k.toLowerCase() === roleName);
+          const roleChain = roleKey !== undefined ? rolesCfg.roles[roleKey] : undefined;
+          const role = roleKey !== undefined && roleChain !== undefined
+            ? { key: roleKey, chain: roleChain }
+            : undefined;
+          if (role) {
+            const { key, chain } = role;
+            const chainText = Array.isArray(chain) ? chain.join(" → ") : String(chain);
+            const users = discovery.agents.filter((a) => getModelCandidates(a).some((c) => c.toLowerCase().split(":")[0] === `@${key.toLowerCase()}`));
+            const overrides = Object.entries(rolesCfg.agentModels).filter(([, v]) => v.toLowerCase().split(":")[0] === `@${key.toLowerCase()}`);
+            const defaultText = DEFAULT_ROLES[key] !== undefined
+              ? (Array.isArray(DEFAULT_ROLES[key]) ? (DEFAULT_ROLES[key] as string[]).join(" → ") : String(DEFAULT_ROLES[key]))
+              : "(custom role)";
+            pi.sendMessage({
+              customType: "pi-subagent",
+              content: [
+                `Role: @${key}`,
+                `Chain: ${chainText} → parent fallback`,
+                `Default: ${defaultText}`,
+                users.length > 0 ? `Agents using @${key}: ${users.map((a) => a.name).join(", ")}` : `No agent references @${key} yet`,
+                overrides.length > 0 ? `Overrides via @${key}: ${overrides.map(([n]) => n).join(", ")}` : "",
+                "",
+                `Edit with /subagent (roles editor) or ~/.pi/agent/settings.json → subagent.roles.`,
+              ].filter(Boolean).join("\n"),
+              display: true,
+            });
+            return;
+          }
+          ctx.ui.notify(`Unknown agent: "${args.trim()}". Use /subagent list to list all.`, "error");
           return;
         }
-        const candidates = getModelCandidates(agent);
+        const rolesCfg = readSubagentRoles(ctx);
         pi.sendMessage({
           customType: "pi-subagent",
           content: [
             `Agent: ${agent.name} (${agent.source})`,
             `Description: ${agent.description}`,
-            `Models: ${candidates.length > 0 ? `${candidates.join(" → ")} → parent fallback` : "parent fallback"}`,
+            `Models: ${describeAgentModels(agent, rolesCfg)}`,
             `Thinking: ${agent.thinking || "off"}`,
             `Tools: ${agent.tools?.join(", ") || "all default"}`,
             `Source file: ${agent.filePath}`,
@@ -413,18 +512,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // List all agents
-      const list = formatAgentList(discovery.agents, 20);
-      const extra = list.remaining > 0 ? `\n  ... +${list.remaining} more` : "";
-      const dirs = discovery.projectAgentsDir ? `\n  project: ${discovery.projectAgentsDir}` : "";
-      const diagText = discovery.diagnostics.length > 0
-        ? "\n\nWarnings:\n" + discovery.diagnostics.map(d => `  - [${d.severity}] ${d.filePath}: ${d.issue}`).join("\n")
-        : "";
-      pi.sendMessage({
-        customType: "pi-subagent",
-        content: `Available agents (${discovery.agents.length}):\n  ${list.text}${extra}${diagText}\n\nScopes searched:\n  user: ${path.join(getAgentDir(), "agents")}${dirs}\n  bundled: ${bundledAgentsDir}\n\nUse /subagent <name> for agent details, /subagent reload to refresh.`,
-        display: true,
-      });
+      // Bare /subagent — open the roles editor (list moved to /subagent list).
+      await openRolesEditor();
     },
   });
 
@@ -475,7 +564,7 @@ export default function (pi: ExtensionAPI) {
       "Bundled agents: scout (fast recon), tester (verification), worker (implementation), general-purpose (fallback), planner (planning), reviewer (review).",
       "For background single tasks use background:true — you will be notified on completion; DO NOT poll or sleep.",
       "Use operation: \"status\" with taskId to inspect a running/completed background task; operation: \"cancel\" to abort one.",
-      "Use /subagent to list all available agents or /subagent <name> for agent details.",
+      "Use /subagent list to list all available agents, /subagent <name> for agent details, /subagent @role for role detail.",
     ],
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       // Surface env-var timeout warnings collected at module load. The
@@ -584,6 +673,7 @@ export default function (pi: ExtensionAPI) {
             },
           ],
           details: makeDetails("single")([]),
+          isError: true,
         };
       }
 
@@ -637,6 +727,10 @@ export default function (pi: ExtensionAPI) {
       const modelRuntime = (modelRegistry as any).runtime;
       const authStorage = (modelRegistry as any).authStorage;
 
+      // Roles + per-agent overrides are read once per execute() call so every
+      // child in this run sees a consistent mapping.
+      const rolesCfg: RolesConfig = readSubagentRoles(ctx);
+
       // Parent session's registered tool names. Agents that omit `tools` inherit
       // the full set (minus the denylist); agents with an explicit `tools` line
       // are validated against built-ins ∪ this set.
@@ -652,9 +746,30 @@ export default function (pi: ExtensionAPI) {
         return safe.path;
       }
 
+      // Helper: stable history id for a foreground run (shared between the
+      // running entry written at start and the completion entry).
+      function makeForegroundHistoryId(startedAt: number): string {
+        return `fg-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      }
+
+      // Helper: record a running foreground task so a crash mid-run shows as
+      // "interrupted" after restart (completion upserts by id and replaces it).
+      function recordForegroundStart(entryId: string, agentName: string, taskText: string, startedAt: number): void {
+        try {
+          appendHistory(path.join(ctx.cwd, CONFIG_DIR_NAME), {
+            id: entryId,
+            agent: agentName,
+            task: taskText,
+            status: "running",
+            startedAt,
+          });
+        } catch { /* history file not writable — non-fatal */ }
+      }
+
       // Helper: record a completed foreground task to the history registry.
       // ponytail: best-effort — history is non-fatal metadata for /subagent history.
       function recordForegroundHistory(
+        entryId: string,
         agentName: string,
         taskText: string,
         result: SubAgentResult,
@@ -672,7 +787,7 @@ export default function (pi: ExtensionAPI) {
                 : "failed"
             : "completed";
           appendHistory(path.join(ctx.cwd, CONFIG_DIR_NAME), {
-            id: `fg-${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            id: entryId,
             agent: agentName,
             task: taskText,
             status,
@@ -743,7 +858,8 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        const resolved = await resolveModel(getModelCandidates(agent), ctx.model, ctx.modelRegistry);
+        const agentChain = resolveAgentModelChain(agent, rolesCfg);
+        const resolved = await resolveModel(agentChain.candidates, ctx.model, ctx.modelRegistry);
         if (!resolved.model) {
           const tried = resolved.attempted.join(", ") || "none";
           const parentInfo = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none";
@@ -786,9 +902,10 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // Retry loop: rate-limit model fallback
-        const candidates = getModelCandidates(agent);
-        const triedModels: string[] = [];
+        // Retry loop: rate-limit model fallback (candidates already role-expanded).
+        // Shared with the service path — single source of truth for triedModels
+        // bookkeeping and per-candidate `:thinking` resolution.
+        const candidates = agentChain.candidates;
 
         // Transport keep-alive only: resets parent idle timeout so a long child
         // run isn't killed. The visible progress now lives in the live widget;
@@ -799,102 +916,62 @@ export default function (pi: ExtensionAPI) {
           widget.requestRender();
         }) : undefined;
         try {
-          const tryWithFallback = async (): Promise<SubAgentResult> => {
-            const remaining = candidates.filter(m => !triedModels.includes(m));
-            const isParentFallback = remaining.length === 0;
-            const fallbackResolved = await resolveModel(remaining, ctx.model, ctx.modelRegistry);
-            if (!fallbackResolved.model) {
-              return {
-                agent: agentName,
+          return await runWithModelFallback<SubAgentResult>({
+            candidates,
+            parentModel: ctx.model,
+            modelRegistry: ctx.modelRegistry,
+            thinkingByCandidate: agentChain.thinkingByCandidate,
+            defaultThinking: agent.thinking,
+            runAttempt: (model, thinkingLevel) =>
+              runSubAgent({
+                cwd: safeCwd,
+                sandbox: agent.sandbox === "worktree" ? "worktree" : undefined,
+                systemPrompt: params.instructions
+                ? `${agent.systemPrompt}\n\n## Task Contract\n${params.instructions.slice(0, MAX_INSTRUCTIONS_LENGTH)}`
+                : agent.systemPrompt,
                 task,
-                exitCode: 1,
-                status: "error" as const,
-                stopReason: "error" as const,
-                messages: [],
-                stderr: [
-                  `All models rate-limited or unavailable.`,
-                  `Tried: ${triedModels.join(" → ") || "(none)"}.`,
-                  `Remaining candidates: ${remaining.join(", ") || "none"}.`,
-                  `Parent: ${ctx.model?.provider}/${ctx.model?.id}.`,
-                ].join(" "),
-                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-                errorMessage: `All models exhausted (tried: ${triedModels.join(" → ") || "none"})`,
-              };
-            }
-            const triedName = `${fallbackResolved.model!.provider}/${fallbackResolved.model!.id}`;
-            if (triedModels.includes(triedName)) {
-              // Already tried this model (e.g., all candidates unavailable
-              // and parent fallback) — no further options.
-              return {
-                agent: agentName,
-                task,
-                exitCode: 1,
-                status: "error" as const,
-                stopReason: "error" as const,
-                messages: [],
-                stderr: [
-                  `All available models exhausted.`,
-                  `Tried: ${triedModels.join(" → ")}.`,
-                ].join(" "),
-                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-                errorMessage: `All available models exhausted (tried: ${triedModels.join(" → ")})`,
-              };
-            }
-            triedModels.push(triedName);
-            // Also track the raw candidate name so candidates.filter() can
-            // exclude it even when the agent uses unqualified names.
-            // Avoid duplicating when candidate name is already qualified (matchedCandidate === triedName).
-            if (fallbackResolved.matchedCandidate && fallbackResolved.matchedCandidate !== triedName) {
-              triedModels.push(fallbackResolved.matchedCandidate);
-            }
-
-            const result = await runSubAgent({
-              cwd: safeCwd,
-              sandbox: agent.sandbox === "worktree" ? "worktree" : undefined,
-              systemPrompt: params.instructions
-              ? `${agent.systemPrompt}\n\n## Task Contract\n${params.instructions.slice(0, MAX_INSTRUCTIONS_LENGTH)}`
-              : agent.systemPrompt,
-              task,
-              tools,
-              model: fallbackResolved.model,
-              modelRuntime,
-              authStorage,
-              modelRegistry,
-              signal: parentSignal,
-              timeoutMs: effectiveTimeoutMs,
-              agentName,
-              thinkingLevel: agent.thinking,
-              onMessage: onProgress,
-              onProgress: onActivity,
-              loadExtensions,
-              projectTrusted,
-            });
-
-            if (result.errorMessage && isRateLimitError(result.errorMessage)) {
-              // If the model that just rate-limited was the parent fallback
-              // (no remaining candidates), stop — no further options.
-              if (isParentFallback) {
-                return {
-                  agent: agentName,
-                  task,
-                  exitCode: 1,
-                  status: "error" as const,
-                  stopReason: "error" as const,
-                  messages: [],
-                  stderr: [
+                tools,
+                model,
+                modelRuntime,
+                authStorage,
+                modelRegistry,
+                signal: parentSignal,
+                timeoutMs: effectiveTimeoutMs,
+                agentName,
+                thinkingLevel,
+                onMessage: onProgress,
+                onProgress: onActivity,
+                loadExtensions,
+                projectTrusted,
+              }),
+            isRateLimited: (result) => Boolean(result.errorMessage && isRateLimitError(result.errorMessage)),
+            onExhausted: (reason, triedModels, remaining) => {
+              const exhaustedStderr = reason === "no-model"
+                ? [
+                    `All models rate-limited or unavailable.`,
+                    `Tried: ${triedModels.join(" → ") || "(none)"}.`,
+                    `Remaining candidates: ${remaining.join(", ") || "none"}.`,
+                    `Parent: ${ctx.model?.provider}/${ctx.model?.id}.`,
+                  ].join(" ")
+                : [
                     `All available models exhausted.`,
                     `Tried: ${triedModels.join(" → ")}.`,
-                  ].join(" "),
-                  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-                  errorMessage: `All available models exhausted (tried: ${triedModels.join(" → ")})`,
-                };
-              }
-              return tryWithFallback();
-            }
-            return result;
-          };
-
-          return tryWithFallback();
+                  ].join(" ");
+              return {
+                agent: agentName,
+                task,
+                exitCode: 1,
+                status: "error" as const,
+                stopReason: "error" as const,
+                messages: [],
+                stderr: exhaustedStderr,
+                usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+                errorMessage: reason === "no-model"
+                  ? `All models exhausted (tried: ${triedModels.join(" → ") || "none"})`
+                  : `All available models exhausted (tried: ${triedModels.join(" → ")})`,
+              };
+            },
+          });
         } finally {
           stopHeartbeat?.();
         }
@@ -917,6 +994,8 @@ export default function (pi: ExtensionAPI) {
             color: agentToThemeColor(step.agent),
           });
           if (ctx.mode === "tui") widget.ensureWidget(ctx);
+          const historyId = makeForegroundHistoryId(thread.createdAt);
+          recordForegroundStart(historyId, step.agent, taskWithContext, thread.createdAt);
           const result = await runOne(
             step.agent, taskWithContext, step.cwd,
             signal, step.timeout ?? params.timeout,
@@ -929,7 +1008,7 @@ export default function (pi: ExtensionAPI) {
             status: isFailedResult(result) ? (result.stopReason === "aborted" ? "aborted" : "failed") : "completed",
             result,
           });
-          recordForegroundHistory(step.agent, taskWithContext, result, thread.createdAt);
+          recordForegroundHistory(historyId, step.agent, taskWithContext, result, thread.createdAt);
           results.push(result);
 
           const isError = isFailedResult(result);
@@ -1075,6 +1154,8 @@ export default function (pi: ExtensionAPI) {
                   emitParallelUpdate();
                   return skippedResult;
                 }
+                const historyId = makeForegroundHistoryId(parallelThreads[index].createdAt);
+                recordForegroundStart(historyId, t.agent, t.task, parallelThreads[index].createdAt);
                 const result = await runOne(
                   t.agent, t.task, t.cwd,
                   parallelController.signal, t.timeout ?? params.timeout,
@@ -1088,7 +1169,7 @@ export default function (pi: ExtensionAPI) {
                   status: isFailedResult(result) ? (result.stopReason === "aborted" ? "aborted" : "failed") : "completed",
                   result,
                 });
-                recordForegroundHistory(t.agent, t.task, result, parallelThreads[index].createdAt);
+                recordForegroundHistory(historyId, t.agent, t.task, result, parallelThreads[index].createdAt);
                 // Early-abort: if this task failed and abortOnFailure is set
                 if (abortOnFailure && isFailedResult(result) && !abortCause) {
                   abortCause = result.stopReason === "timeout" ? "timeout" : "sibling";
@@ -1152,6 +1233,8 @@ export default function (pi: ExtensionAPI) {
           color: agentToThemeColor(params.agent),
         });
         if (ctx.mode === "tui") widget.ensureWidget(ctx);
+        const historyId = makeForegroundHistoryId(thread.createdAt);
+        recordForegroundStart(historyId, params.agent, params.task, thread.createdAt);
         const result = await runOne(
           params.agent, params.task, params.cwd,
           signal, params.timeout,
@@ -1164,7 +1247,7 @@ export default function (pi: ExtensionAPI) {
           status: isFailedResult(result) ? (result.stopReason === "aborted" ? "aborted" : "failed") : "completed",
           result,
         });
-        recordForegroundHistory(params.agent, params.task, result, thread.createdAt);
+        recordForegroundHistory(historyId, params.agent, params.task, result, thread.createdAt);
         const isError = isFailedResult(result);
 
         if (onUpdate) {

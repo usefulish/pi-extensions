@@ -7,7 +7,7 @@ import { describe, it } from "mocha";
 import { ModelRuntime, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { discoverAgents, getModelCandidates, invalidateAgentCache } from "../agents.ts";
-import { resolveModel } from "../model.ts";
+import { resolveModel, runWithModelFallback } from "../model.ts";
 import { mapWithConcurrencyLimit, isFailedResult, getResultOutput, getFinalOutput, runSubAgent, startHeartbeat, createWorktree, captureWorktreeDiff, removeWorktree } from "../runner.ts";
 import { ThreadStore } from "../threads.ts";
 import {
@@ -275,11 +275,13 @@ describe("agent discovery", () => {
     const agents = discoverAgents(root, "project", path.resolve(import.meta.dirname, "../../agents")).agents;
     const planner = agents.find((agent) => agent.name === "planner")!;
     const tester = agents.find((agent) => agent.name === "tester")!;
-    assert.deepEqual(getModelCandidates(planner), ["zai-coding-cn/glm-5.3", "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", "opencode-go/deepseek-v4-pro"]);
+    // Model chains now live in roles (see roles.test.ts behavior-preservation
+    // asserts); bundled agents reference the aliases.
+    assert.deepEqual(getModelCandidates(planner), ["@smart"]);
     assert.equal(planner.thinking, "high");
     assert.equal(planner.sandbox, "read-only");
     assert.deepEqual(planner.tools, ["read", "grep", "find", "ls"]);
-    assert.deepEqual(getModelCandidates(tester), ["zai-coding-cn/glm-5-turbo", "nvidia/openai/gpt-oss-20b", "opencode-go/deepseek-v4-flash"]);
+    assert.deepEqual(getModelCandidates(tester), ["@fast"]);
     assert.equal(tester.thinking, "off");
     assert.deepEqual(tester.tools, ["read", "bash", "grep", "find", "ls"]);
   });
@@ -554,6 +556,18 @@ describe("runSubAgent retry lifecycle", () => {
     } finally {
       modelRuntime.unregisterProvider(faux.provider.id);
     }
+  });
+
+  it("getFinalOutput joins interleaved text parts with a newline", () => {
+    const out = getFinalOutput([{
+      role: "assistant",
+      content: [
+        { type: "text", text: "Part one." },
+        { type: "toolCall", toolCallId: "c1", name: "read", arguments: "{}" },
+        { type: "text", text: "Part two." },
+      ],
+    }] as any);
+    assert.equal(out, "Part one.\nPart two.");
   });
 });
 
@@ -1150,6 +1164,99 @@ describe("validateExecutionRequest", () => {
       chain: [{ agent: "", task: "test" }],
     });
     assert.ok(errors.length > 0);
+  });
+
+  it("rejects invalid timeout", () => {
+    const errors = validateExecutionRequest({ agentName: "scout", task: "t", timeout: -1 });
+    assert.ok(errors.some((e) => e.field === "timeout"));
+  });
+
+  it("accepts a valid timeout", () => {
+    const errors = validateExecutionRequest({ agentName: "scout", task: "t", timeout: 30_000 });
+    assert.deepEqual(errors, []);
+  });
+});
+
+// ===========================================================================
+// runWithModelFallback: per-candidate :thinking resolution + fallback loop
+// ===========================================================================
+
+describe("runWithModelFallback", () => {
+  // Minimal registry mapping provider/id -> a stub model object.
+  function makeRegistry(ids: string[]): ModelRegistry {
+    const available = ids.map((id) => {
+      const [provider, ...rest] = id.split("/");
+      return { provider, id: rest.join("/"), name: id } as any;
+    });
+    return { getAvailable: () => available } as any;
+  }
+
+  it("passes the matched candidate's :thinking suffix to runAttempt", async () => {
+    const registry = makeRegistry(["p/x", "p/y"]);
+    const thinkingByCandidate = new Map([["p/x", "high" as const]]);
+    const seen: Array<string | undefined> = [];
+    await runWithModelFallback({
+      candidates: ["p/x:high", "p/y"],
+      parentModel: undefined,
+      modelRegistry: registry,
+      thinkingByCandidate,
+      defaultThinking: "off",
+      runAttempt: async (_model, thinkingLevel) => { seen.push(thinkingLevel); return { ok: true }; },
+      isRateLimited: () => false,
+      onExhausted: () => { throw new Error("not exhausted"); },
+    });
+    assert.deepEqual(seen, ["high"]);
+  });
+
+  it("falls back to defaultThinking when the candidate has no suffix", async () => {
+    const registry = makeRegistry(["p/x"]);
+    const seen: Array<string | undefined> = [];
+    await runWithModelFallback({
+      candidates: ["p/x"],
+      parentModel: undefined,
+      modelRegistry: registry,
+      thinkingByCandidate: new Map(),
+      defaultThinking: "medium",
+      runAttempt: async (_model, thinkingLevel) => { seen.push(thinkingLevel); return { ok: true }; },
+      isRateLimited: () => false,
+      onExhausted: () => { throw new Error("not exhausted"); },
+    });
+    assert.deepEqual(seen, ["medium"]);
+  });
+
+  it("advances to the next candidate after a rate-limit failure", async () => {
+    const registry = makeRegistry(["p/x", "p/y"]);
+    const seen: string[] = [];
+    await runWithModelFallback({
+      candidates: ["p/x", "p/y"],
+      parentModel: undefined,
+      modelRegistry: registry,
+      thinkingByCandidate: new Map(),
+      defaultThinking: undefined,
+      runAttempt: async (model) => {
+        seen.push(`${model.provider}/${model.id}`);
+        return { ok: model.id === "y" } as any;
+      },
+      isRateLimited: (r: any) => !r.ok,
+      onExhausted: () => { throw new Error("not exhausted"); },
+    });
+    assert.deepEqual(seen, ["p/x", "p/y"]);
+  });
+
+  it("calls onExhausted when no candidate resolves", async () => {
+    const registry = makeRegistry(["other/only"]);
+    let exhausted = false;
+    await runWithModelFallback({
+      candidates: ["p/x"],
+      parentModel: undefined,
+      modelRegistry: registry,
+      thinkingByCandidate: new Map(),
+      defaultThinking: undefined,
+      runAttempt: async () => ({ ok: true }),
+      isRateLimited: () => false,
+      onExhausted: (reason) => { exhausted = true; assert.equal(reason, "no-model"); return { ok: false } as any; },
+    });
+    assert.ok(exhausted);
   });
 });
 

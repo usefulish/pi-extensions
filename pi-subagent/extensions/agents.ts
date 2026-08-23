@@ -184,6 +184,8 @@ function loadAgentsFromDir(
     }
     for (const modelName of getModelCandidates({ model, models })) {
       if (modelName.includes("/")) continue;
+      // @role aliases and `*` (parent) are resolved at dispatch — not model ids.
+      if (modelName.startsWith("@") || modelName === "*") continue;
       diagnostics.push({
         filePath,
         issue: `Model "${modelName}" does not include a provider prefix (e.g., "anthropic/claude-sonnet-4-20250514"). Resolution may fail.`,

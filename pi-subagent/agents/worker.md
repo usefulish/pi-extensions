@@ -1,11 +1,7 @@
 ---
 name: worker
 description: General-purpose coding agent with full tool access. Use only when explicitly requested for isolated implementation.
-models:
-  - zai-coding-cn/glm-5.1
-  - nvidia/mistralai/mistral-small-4-119b-2603
-  - openrouter/nvidia/nemotron-3-super-120b-a12b:free
-  - opencode-go/deepseek-v4-flash
+model: "@coder"
 thinking: medium
 color: green
 ---

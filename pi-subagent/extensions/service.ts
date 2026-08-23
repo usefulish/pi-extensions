@@ -1,7 +1,8 @@
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type AgentConfig, getModelCandidates } from "./agents.ts";
+import { type AgentConfig } from "./agents.ts";
 import { runSubAgent, type SubAgentProgress, type SubAgentResult } from "./runner.ts";
-import { resolveModel } from "./model.ts";
+import { resolveModel, runWithModelFallback } from "./model.ts";
+import { readSubagentRoles, resolveAgentModelChain } from "./roles.ts";
 import {
   isRateLimitError,
   validateAgentTools,
@@ -42,10 +43,15 @@ export async function runNamedAgent(options: {
   signal?: AbortSignal;
   /** When true, only read-only tools are permitted regardless of agent.sandbox. */
   readOnly?: boolean;
+  /** Trusted opt-out for child cwd outside the workspace (from getTrustedConfig). */
+  allowExternalCwd?: boolean;
   onMessage?: (result: SubAgentResult) => void;
   onProgress?: (progress: SubAgentProgress) => void;
 }): Promise<SubAgentResult> {
-  const { model, attempted } = await resolveModel(getModelCandidates(options.agent), options.ctx.model, options.ctx.modelRegistry);
+  const rolesCfg = readSubagentRoles(options.ctx);
+  const agentChain = resolveAgentModelChain(options.agent, rolesCfg);
+  const resolvedModel = await resolveModel(agentChain.candidates, options.ctx.model, options.ctx.modelRegistry);
+  const { model, attempted } = resolvedModel;
   if (!model) throw new Error(`No model resolved for agent "${options.agent.name}" (tried: ${attempted.join(", ") || "none"})`);
 
   const modelRegistry = options.ctx.modelRegistry;
@@ -53,7 +59,11 @@ export async function runNamedAgent(options: {
   const authStorage = (modelRegistry as any).authStorage;
 
   // Security: validate and normalise timeout.
-  const effectiveTimeoutMs = normalizeTimeout({ requested: options.timeout }).timeoutMs;
+  const timeoutResult = normalizeTimeout({ requested: options.timeout });
+  if (timeoutResult.error) {
+    throw new Error(timeoutResult.error);
+  }
+  const effectiveTimeoutMs = timeoutResult.timeoutMs;
 
   // Parent tool names — agents without an explicit `tools` line inherit them.
   const parentToolNames = (options.ctx as any).getAllTools?.()?.map((t: { name: string }) => t.name) as string[] | undefined;
@@ -77,80 +87,55 @@ export async function runNamedAgent(options: {
 
   // Security: validate cwd (service caller must provide valid cwd).
   // The service path uses the same policy as the tool path.
-  const safeCwd = resolveSafeCwd({ workspaceRoot: options.ctx.cwd, childCwd: options.cwd });
+  const safeCwd = resolveSafeCwd({ workspaceRoot: options.ctx.cwd, childCwd: options.cwd, allowExternalCwd: options.allowExternalCwd });
   if (safeCwd.error) {
     throw new Error(safeCwd.error);
   }
 
   const contract = options.instructions?.slice(0, MAX_INSTRUCTIONS_LENGTH);
 
-  // Retry loop: rate-limit model fallback
-  const candidates = getModelCandidates(options.agent);
-  const triedModels: string[] = [];
-
-  const tryWithFallback = async (): Promise<SubAgentResult> => {
-    const remaining = candidates.filter(m => !triedModels.includes(m));
-    const isParentFallback = remaining.length === 0;
-    const fallbackResolved = await resolveModel(remaining, options.ctx.model, options.ctx.modelRegistry);
-    if (!fallbackResolved.model) {
-      throw new Error(
-        `All models rate-limited or unavailable. Tried: ${triedModels.join(" → ") || "(none)"}. ` +
-        `Remaining candidates: ${remaining.join(", ") || "none"}. ` +
-        `Parent: ${options.ctx.model?.provider}/${options.ctx.model?.id}.`,
-      );
-    }
-    const triedName = `${fallbackResolved.model!.provider}/${fallbackResolved.model!.id}`;
-    if (triedModels.includes(triedName)) {
-      // Already tried this model (e.g., all candidates unavailable
-      // and parent fallback) — no further options.
-      throw new Error(
-        `All available models exhausted. Tried: ${triedModels.join(" → ")}.`,
-      );
-    }
-    triedModels.push(triedName);
-    // Also track the raw candidate name so candidates.filter() can
-    // exclude it even when the agent uses unqualified names.
-    // Avoid duplicating when candidate name is already qualified (matchedCandidate === triedName).
-    if (fallbackResolved.matchedCandidate && fallbackResolved.matchedCandidate !== triedName) {
-      triedModels.push(fallbackResolved.matchedCandidate);
-    }
-
-    const result = await runSubAgent({
-      cwd: safeCwd.path,
-      sandbox: options.agent.sandbox === "worktree" ? "worktree" : undefined,
-      systemPrompt: contract ? `${options.agent.systemPrompt}\n\n## Task Contract\n${contract}` : options.agent.systemPrompt,
-      task: options.task,
-      tools: toolValidation.tools,
-      model: fallbackResolved.model,
-      modelRuntime,
-      authStorage,
-      modelRegistry,
-      signal: options.signal,
-      timeoutMs: effectiveTimeoutMs,
-      agentName: options.agent.name,
-      thinkingLevel: options.agent.thinking,
-      onMessage: options.onMessage,
-      onProgress: options.onProgress,
-      loadExtensions,
-      projectTrusted,
-    });
-
-    if (result.errorMessage && isRateLimitError(result.errorMessage)) {
-      // If the model that just rate-limited was the parent fallback
-      // (no remaining candidates), stop — no further options.
-      if (isParentFallback) {
+  // Retry loop: rate-limit model fallback — shared with the tool path so the
+  // triedModels bookkeeping and per-candidate `:thinking` resolution stay in
+  // one place (see runWithModelFallback in model.ts). Errors are thrown here;
+  // the caller maps them to its own response shape.
+  return runWithModelFallback<SubAgentResult>({
+    candidates: agentChain.candidates,
+    parentModel: options.ctx.model,
+    modelRegistry: options.ctx.modelRegistry,
+    thinkingByCandidate: agentChain.thinkingByCandidate,
+    defaultThinking: options.agent.thinking,
+    runAttempt: (model, thinkingLevel) =>
+      runSubAgent({
+        cwd: safeCwd.path,
+        sandbox: options.agent.sandbox === "worktree" ? "worktree" : undefined,
+        systemPrompt: contract ? `${options.agent.systemPrompt}\n\n## Task Contract\n${contract}` : options.agent.systemPrompt,
+        task: options.task,
+        tools: toolValidation.tools,
+        model,
+        modelRuntime,
+        authStorage,
+        modelRegistry,
+        signal: options.signal,
+        timeoutMs: effectiveTimeoutMs,
+        agentName: options.agent.name,
+        thinkingLevel,
+        onMessage: options.onMessage,
+        onProgress: options.onProgress,
+        loadExtensions,
+        projectTrusted,
+      }),
+    isRateLimited: (result) => Boolean(result.errorMessage && isRateLimitError(result.errorMessage)),
+    onExhausted: (reason, triedModels, remaining) => {
+      const tried = triedModels.join(" → ") || "(none)";
+      const parent = options.ctx.model ? `${options.ctx.model.provider}/${options.ctx.model.id}` : "none";
+      if (reason === "no-model") {
         throw new Error(
-          `All available models exhausted. Tried: ${triedModels.join(" → ")}.`,
+          `All models rate-limited or unavailable. Tried: ${tried}. ` +
+          `Remaining candidates: ${remaining.join(", ") || "none"}. ` +
+          `Parent: ${parent}.`,
         );
       }
-      return tryWithFallback();
-    }
-    return result;
-  };
-
-  try {
-    return await tryWithFallback();
-  } finally {
-    // No manual timeout handling needed — runSubAgent handles timeouts internally.
-  }
+      throw new Error(`All available models exhausted. Tried: ${tried}.`);
+    },
+  });
 }

@@ -2,10 +2,7 @@
 name: planner
 description: Read-only planning and architecture specialist. Use for consequential design, tradeoff analysis, and implementation plans.
 tools: read, grep, find, ls
-models:
-  - zai-coding-cn/glm-5.3
-  - openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
-  - opencode-go/deepseek-v4-pro
+model: "@smart"
 thinking: high
 color: blue
 sandbox: read-only
