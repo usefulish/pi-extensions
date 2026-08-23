@@ -7,9 +7,9 @@ into the Pi coding agent, each in its own npm package under `@bacnh85/`.
 
 | Package | Version | Description |
 |---------|---------|-------------|
-| **pi-router** | 1.0.1 | Connect to any OpenAI-compatible AI router (9router, omniroute, …) via its /v1 API; API key via built-in /login, URL in settings.json, models auto-cached in models-store.json. |
+| **pi-router** | 1.1.0 | Connect to any OpenAI-compatible AI router (9router, omniroute, …) via its /v1 API; API key via built-in /login, URL in settings.json (`/router-config` panel), models auto-cached in models-store.json. |
 | **pi-chatgpt-web** | 0.2.0 | ChatGPT web-tier providers via self-hosted OpenAI-compatible bridges — chat-only `chatgpt-web` (chatgpt2api) + agentic `codex-web` (codex-proxy, tool-capable). No Plus subscription. |
-| **pi-commandcode** | 0.1.0 | Connect to Command Code's OpenAI-compatible Provider API; uses built-in `/login` for API-key setup. |
+| **pi-commandcode** | 0.2.0 | Connect to Command Code's OpenAI-compatible Provider API; API key via built-in `/login`, base URL in settings.json (`/commandcode-config` panel), models auto-cached. |
 | **pi-checkpoint** | 0.1.0 | Git-backed undo/redo — snapshots file state per turn into a dedicated ref namespace so `/undo` rolls back a message AND its file changes. |
 | **pi-notify** | 0.1.1 | Desktop notifications and sounds — fires on task completion, errors, and questions; cross-platform (macOS/Linux/Windows + terminal OSC). |
 | **pi-references** | 0.1.1 | External context roots — alias sibling dirs or git repos as `@docs`/`@sdk`; auto-clones repos and injects descriptions into agent context. |
@@ -22,7 +22,8 @@ into the Pi coding agent, each in its own npm package under `@bacnh85/`.
 | **pi-model-tools** | 0.5.5 | Unified tool-wrapping, argument repair, reasoning management, DeepSeek V4 guidance + Super Power Mode, defensive leak-cleaning, edit mismatch repair, and a Codex-style apply_patch diff tool. |
 | **pi-munin** | 0.5.2 | Munin long-term memory as eight native Pi tools for search, retrieval, storage, listing, deletion, capabilities, and confirmed cross-project sharing. |
 | **pi-evolve** | 0.3.1 | Trajectory-based self-learning loop — captures tool-call trajectories, reflects to extract learnings, persists to Munin or local JSONL, injects recent learnings into future sessions. |
-| **pi-a2a** | 0.6.3 | A2A Protocol v1.0 bidirectional — Pi distributes tasks to remote agents (Hermes, ADK, LangChain, any A2A peer), exposes itself as an A2A-callable agent, self-declares for local session discovery (file registry + enriched Agent Card + mDNS), registers with **multiple a2a-switchboard gateways** (`discovery.gateways`), shows inbound task activity in the host TUI, and has an interactive config panel. |
+| **pi-a2a** | 0.7.0 | A2A Protocol v1.0 bidirectional — Pi distributes tasks to remote agents (Hermes, ADK, LangChain, any A2A peer), exposes itself as an A2A-callable agent, self-declares for local session discovery (file registry + enriched Agent Card + mDNS), registers with **multiple a2a-switchboard gateways** (`discovery.gateways`), shows inbound task activity in the host TUI, and has an interactive config panel. |
+| **pi-config-panel** | 0.1.0 | Shared interactive config-panel kernel (library) — arrow-key toggle/edit overlay panels (`PanelRow`/`PanelGroup` + `ConfigPanelModel` TUI shell) via `ctx.ui.custom`; powers `/a2a-config`, `/commandcode-config`, `/router-config`. |
 | **pi-notebooklm** | 0.1.8 | Google NotebookLM — notebooks, sources, chat, research, and Studio artifacts via CLI bridge. |
 | **pi-obsidian** | 0.8.13 | Obsidian vault integration for Pi. |
 | **pi-plan** | 0.10.4 | Plan mode with read-only gating and plan → implement → verify → review workflow; fallback model chain on overload. |
@@ -48,7 +49,8 @@ pi-extensions/
   pi-ux/                # JS extension + hook + skill for anti-slop UI/UX design discipline
   pi-munin/             # TS extension + lib/helpers + skill + references
   pi-evolve/            # TS extension + lib/buffer+store+inject + skill for trajectory self-learning
-  pi-a2a/               # TS extension + lib (protocol/client/server/config/security/persistence/registry/mdns/discovery/activity/config-panel) for A2A Protocol v1.0
+  pi-a2a/               # TS extension + lib (protocol/client/server/config/security/persistence/registry/mdns/discovery/activity/config-panel rows) for A2A Protocol v1.0
+pi-config-panel/      # TS library package — shared config-panel kernel (no pi field; consumed as a dependency)
   pi-plan/              # TS extension for plan mode + workflow integration
   pi-subagent/          # TS extension for isolated SDK subagents
   pi-review/            # TS extension for isolated/local code review
@@ -224,6 +226,16 @@ Non-trivial logic (a branch, a loop, a parser, a money/security path) leaves ONE
   Pi global config `.env.local` → `.env`. Implemented in each package's config module.
 - Skills use SKILL.md with YAML frontmatter under `skills/<name>/SKILL.md`.
 - Never hardcode API URLs/keys; always load through config modules.
+- **Config placement rule**: non-secret config lives in `settings.json` under
+  the extension's key (`router.baseUrl`, `commandcode.baseUrl`, `a2a`, …);
+  secrets/API keys live in `auth.json` via Pi's `/login` (`apiKey: "$ENV"`
+  provider pattern). Never write secrets or a repo-controlled
+  `.pi/settings.json` from extension code.
+- **Interactive config panels** use the shared kernel in
+  `@bacnh85/pi-config-panel` (`openConfigPanel`, `row`, `makeOnAction`) —
+  don't fork the TUI shell per extension. Each extension ships only its row
+  builder; provider extensions follow the pi-router pattern for live apply
+  (re-register provider → `modelRegistry.refresh` → keep active model).
 - Keep each package focused on one capability area — tools, commands, skills.
 
 ## Adding a new package

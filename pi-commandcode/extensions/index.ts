@@ -2,7 +2,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { openConfigPanel, row } from "@bacnh85/pi-config-panel";
 import { DEFAULT_BASE_URL, fetchModels, mapModel, type CommandCodeModelRaw } from "./lib/client.js";
+import { getSettings, isCustomEndpoint, writeBaseUrl, type CommandCodeSettings } from "./lib/config.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -15,7 +17,6 @@ const STARTUP_DISCOVERY_TIMEOUT_MS = 5_000;
 const CACHE_DIR = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "pi");
 const MODEL_CACHE_PATH = join(CACHE_DIR, "commandcode-models.json");
 
-const ENV_BASE_URL = process.env.COMMAND_CODE_BASE_URL;
 const ENV_API_KEY = process.env.COMMAND_CODE_API_KEY;
 
 const PROVIDER_ID = "commandcode";
@@ -45,20 +46,22 @@ function writeModelCache(models: CommandCodeModelRaw[]): void {
   }
 }
 
-// ── Provider lifecycle ───────────────────────────────────────────────────────
-
-function effectiveBaseUrl(): string {
-  return (ENV_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
+function cachedModelCount(): number {
+  return readModelCache()?.length ?? 0;
 }
 
-/** Register the provider. Models are registered via refreshModels so Pi's
- *  catalog refresh (run after /login completes and on startup) populates them.
- *  apiKey env-interpolation makes /login auto-available AND resolvable from
- *  COMMAND_CODE_API_KEY without login. */
-function registerProvider(pi: ExtensionAPI) {
+// ── Provider lifecycle ───────────────────────────────────────────────────────
+
+/** Register the provider with the given settings. Re-registerable — the
+ *  config panel calls this after saving a new baseUrl so the provider points
+ *  at the fresh endpoint without a restart (same pattern as pi-router's
+ *  /router-reasoning). Models are registered via refreshModels so Pi's
+ *  catalog refresh populates them. `apiKey` env-interpolation makes /login
+ *  auto-available AND resolvable from COMMAND_CODE_API_KEY without login. */
+function registerProvider(pi: ExtensionAPI, settings: CommandCodeSettings) {
   pi.registerProvider(PROVIDER_ID, {
     name: "Command Code",
-    baseUrl: effectiveBaseUrl(),
+    baseUrl: settings.baseUrl,
     apiKey: "$COMMAND_CODE_API_KEY",
     api: "openai-completions",
     refreshModels: async (context) => {
@@ -72,8 +75,7 @@ function registerProvider(pi: ExtensionAPI) {
       // after /login) or env. Never assume a global.
       const apiKey = context.credential?.type === "api_key" ? context.credential.key : ENV_API_KEY;
 
-      const baseUrl = effectiveBaseUrl();
-      const raw = await fetchModels(baseUrl, apiKey, context.signal);
+      const raw = await fetchModels(settings.baseUrl, apiKey, context.signal);
       writeModelCache(raw);
       return raw.map(mapModel);
     },
@@ -82,14 +84,13 @@ function registerProvider(pi: ExtensionAPI) {
 
 /** Background model discovery with a short timeout. Used only at startup so
  *  the disk cache stays current; /login and catalog refresh handle the rest. */
-async function startBackgroundDiscovery(): Promise<void> {
+async function startBackgroundDiscovery(settings: CommandCodeSettings): Promise<void> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), STARTUP_DISCOVERY_TIMEOUT_MS);
     timer.unref?.();
 
-    const baseUrl = effectiveBaseUrl();
-    const raw = await fetchModels(baseUrl, ENV_API_KEY, controller.signal);
+    const raw = await fetchModels(settings.baseUrl, ENV_API_KEY, controller.signal);
     clearTimeout(timer);
 
     writeModelCache(raw);
@@ -100,14 +101,86 @@ async function startBackgroundDiscovery(): Promise<void> {
   }
 }
 
+// ── /commandcode-config ──────────────────────────────────────────────────────
+
+/** Summary for non-TUI mode / `show` (mirrors pi-router's configSummary). */
+function configSummary(s: CommandCodeSettings): string {
+  const key = ENV_API_KEY
+    ? "set (env COMMAND_CODE_API_KEY)"
+    : "run /login commandcode (auth.json) or set COMMAND_CODE_API_KEY";
+  return [
+    "Command Code config:",
+    `  baseUrl: ${s.baseUrl}${isCustomEndpoint(s) ? "" : " (default)"}`,
+    `  apiKey: ${key}`,
+    `  cached models: ${cachedModelCount()}`,
+    "",
+    "Interactive editor: run /commandcode-config in TUI mode.",
+    "Select models with /model (commandcode provider).",
+  ].join("\n");
+}
+
+function registerConfigCommand(pi: ExtensionAPI): void {
+  pi.registerCommand("commandcode-config", {
+    description: "Configure Command Code endpoint interactively (TUI) or show config",
+    handler: async (args, ctx) => {
+      const sub = String(args ?? "").trim().toLowerCase();
+
+      // Non-interactive mode or explicit "show": print the summary.
+      if (sub === "show" || ctx.mode !== "tui" || !ctx.hasUI) {
+        ctx.ui.notify(configSummary(getSettings(ctx.cwd)), "info");
+        return;
+      }
+
+      const before = getSettings(ctx.cwd);
+      const working = structuredClone(before);
+      await openConfigPanel({
+        ctx,
+        cfg: working,
+        title: "Command Code Configuration",
+        build: (cfg) => [
+          {
+            key: "endpoint",
+            label: "Endpoint",
+            rows: [
+              row("baseUrl", "Base URL", "string", cfg.baseUrl, (v) => {
+                cfg.baseUrl = String(v ?? "").trim().replace(/\/+$/, "") || DEFAULT_BASE_URL;
+              }),
+            ],
+          },
+        ],
+        onSave: async (saved) => {
+          if (!saved) return;
+          if (working.baseUrl === before.baseUrl) {
+            ctx.ui.notify("No changes.", "info");
+            return;
+          }
+          const written = writeBaseUrl(working.baseUrl);
+          // Re-register so the provider points at the new endpoint, then
+          // force a catalog refresh (same pattern as pi-router).
+          registerProvider(pi, working);
+          try {
+            await ctx.modelRegistry.refresh({ providers: [PROVIDER_ID] });
+          } catch {
+            /* refresh errors are surfaced by Pi elsewhere */
+          }
+          ctx.ui.notify(`Command Code baseUrl saved → ${written}\nModels refreshed — select with /model.`, "info");
+        },
+      });
+    },
+  });
+}
+
 // ── Extension factory ────────────────────────────────────────────────────────
 // IMPORTANT: Do NOT await a network call in the factory. Pi awaits the factory
 // before continuing startup, so a blocking fetch would hang or freeze the UI.
 // Register the provider (instant), then fire background discovery.
 
 export default function (pi: ExtensionAPI) {
-  registerProvider(pi);
+  const settings = getSettings();
+  registerProvider(pi, settings);
+
+  registerConfigCommand(pi);
 
   // Warm the cache in the background (non-blocking).
-  void startBackgroundDiscovery();
+  void startBackgroundDiscovery(settings);
 }

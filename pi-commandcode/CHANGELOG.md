@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.0 — 2026-08-22
+
+### Added
+
+- **`/commandcode-config`** — interactive config panel (TUI) built on the new
+  shared `@bacnh85/pi-config-panel` kernel. Edit the endpoint base URL with
+  arrow keys; Esc saves to `~/.pi/agent/settings.json` under `commandcode.baseUrl`,
+  re-registers the provider at the new endpoint, and forces a model catalog
+  refresh — pick the refreshed models with `/model`.
+- Non-interactive fallback (`show` arg or non-TUI mode): prints endpoint,
+  masked key source, and cached model count.
+
+### Changed
+
+- Base URL now resolves `commandcode.baseUrl` from settings.json (env
+  `COMMAND_CODE_BASE_URL` > repo `.pi/settings.json` > global > default),
+  matching pi-router. API keys stay in `auth.json` via `/login commandcode`
+  (never settings.json).
+
 ## 0.1.6 (2026-08-24)
 
 ### Fixes

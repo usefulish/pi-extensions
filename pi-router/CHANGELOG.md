@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0 — 2026-08-22
+
+### Added
+
+- **`/router-config`** — interactive settings panel (TUI) built on the shared
+  `@bacnh85/pi-config-panel` kernel. Edit `router.baseUrl` and
+  `router.enableReasoning` with arrow keys; Esc saves to `~/.pi/agent/settings.json`
+  (merge, never clobber), re-registers the provider, forces a catalog refresh, and
+  keeps the active model valid (`refreshActiveModel`). Warns when env vars or repo
+  `.pi/settings.json` shadow the saved values. Non-TUI mode / `show` arg prints a
+  config summary (endpoint, reasoning flag, masked key source).
+
 ## 1.0.1 — 2026-08-22
 
 Review fixes:

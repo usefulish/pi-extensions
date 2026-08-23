@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { openConfigPanel, row } from "@bacnh85/pi-config-panel";
 import type { RouterSettings } from "../lib/config.js";
-import { configSummary, getSettings } from "../lib/config.js";
+import { configSummary, getSettings, readStoredApiKey, maskApiKey, normalizeUrl } from "../lib/config.js";
 import { registerProvider, PROVIDER_ID } from "../lib/provider.js";
 import { refreshActiveModel } from "../index.js";
 
@@ -29,6 +30,20 @@ function writeReasoningFlag(value: boolean): void {
   router.enableReasoning = value;
   settings.router = router;
   writeFileSync(settingsPath(), JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+}
+
+/** Read-modify-write non-secret `router` fields into the GLOBAL settings.json
+ *  (merge, never clobber). `baseUrl` is normalized (trailing slashes stripped). */
+function writeRouterSection(patch: { baseUrl?: string; enableReasoning?: boolean }): void {
+  const settings = readSettingsJson();
+  const router = (settings.router ?? {}) as Record<string, unknown>;
+  if (patch.baseUrl !== undefined) router.baseUrl = normalizeUrl(patch.baseUrl);
+  if (patch.enableReasoning !== undefined) router.enableReasoning = patch.enableReasoning;
+  settings.router = router;
+  mkdirSync(dirname(settingsPath()), { recursive: true });
+  const tmp = settingsPath() + ".tmp";
+  writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n", { mode: 0o600 });
+  renameSync(tmp, settingsPath());
 }
 
 export function registerCommands(pi: ExtensionAPI, _getSettings: () => RouterSettings): void {
@@ -128,6 +143,7 @@ export function registerCommands(pi: ExtensionAPI, _getSettings: () => RouterSet
         "",
         "Commands:",
         "  /login router       Store API key (auth.json)",
+        "  /router-config      Interactive settings panel",
         "  /router-reasoning   Toggle thinking levels",
         "  /router-model       Search and select a model",
         "  /model              Pi built-in picker (triggers refresh)",
@@ -135,6 +151,92 @@ export function registerCommands(pi: ExtensionAPI, _getSettings: () => RouterSet
         "URL: settings.json `router.baseUrl` or ROUTER_BASE_URL env.",
       ];
       ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("router-config", {
+    description: "Configure router endpoint interactively (TUI) or show config",
+    handler: async (args, ctx) => {
+      const sub = String(args ?? "").trim().toLowerCase();
+
+      // Non-interactive mode or explicit "show": print the summary.
+      if (sub === "show" || ctx.mode !== "tui" || !ctx.hasUI) {
+        const s = getSettings();
+        const key = process.env.ROUTER_API_KEY
+          ? maskApiKey(process.env.ROUTER_API_KEY) + " (env)"
+          : maskApiKey(readStoredApiKey());
+        ctx.ui.notify(
+          [
+            "Router config:",
+            `  baseUrl: ${s.baseUrl || "(not configured)"}`,
+            `  enableReasoning: ${s.enableReasoning}`,
+            `  apiKey: ${key}`,
+            "",
+            "Interactive editor: run /router-config in TUI mode.",
+          ].join("\n"),
+          "info",
+        );
+        return;
+      }
+
+      const before = getSettings();
+      const working = structuredClone(before);
+      await openConfigPanel({
+        ctx,
+        cfg: working,
+        title: "Router Configuration",
+        build: (cfg) => [
+          {
+            key: "endpoint",
+            label: "Endpoint",
+            rows: [
+              row("baseUrl", "Base URL", "string", cfg.baseUrl, (v) => {
+                cfg.baseUrl = String(v ?? "").trim();
+              }),
+            ],
+          },
+          {
+            key: "models",
+            label: "Models",
+            rows: [
+              row("enableReasoning", "Thinking levels", "toggle", cfg.enableReasoning, (v) => {
+                cfg.enableReasoning = Boolean(v);
+              }),
+            ],
+          },
+        ],
+        onSave: async (saved) => {
+          if (!saved) return;
+          if (
+            working.baseUrl === before.baseUrl &&
+            working.enableReasoning === before.enableReasoning
+          ) {
+            ctx.ui.notify("No changes.", "info");
+            return;
+          }
+          writeRouterSection({
+            baseUrl: working.baseUrl !== before.baseUrl ? working.baseUrl : undefined,
+            enableReasoning: working.enableReasoning !== before.enableReasoning ? working.enableReasoning : undefined,
+          });
+          // Re-register so the provider closure picks up the new values, then
+          // force a refresh; refreshActiveModel keeps the active model valid.
+          registerProvider(pi, working);
+          try {
+            await ctx.modelRegistry.refresh({ providers: [PROVIDER_ID] });
+          } catch { /* refresh errors are surfaced by Pi elsewhere */ }
+          await refreshActiveModel(pi, ctx);
+          const effective = getSettings();
+          const overridden =
+            (working.baseUrl !== effective.baseUrl && working.baseUrl !== "") ||
+            working.enableReasoning !== effective.enableReasoning;
+          ctx.ui.notify(
+            overridden
+              ? `Saved to settings.json, but ROUTER_BASE_URL/ROUTER_ENABLE_REASONING env or repo .pi/settings.json overrides it — effective: ${effective.baseUrl || "(none)"}, reasoning ${effective.enableReasoning}.`
+              : `Router config saved. Endpoint: ${effective.baseUrl || "(not configured)"} · reasoning ${effective.enableReasoning ? "ON" : "OFF"}`,
+            overridden ? "warning" : "info",
+          );
+        },
+      });
     },
   });
 }

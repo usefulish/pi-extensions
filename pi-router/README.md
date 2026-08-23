@@ -59,6 +59,7 @@ Models are fetched automatically via Pi's native `refreshModels`:
 |---------|-------------|
 | `/login router` | Built-in Pi login — stores the API key in auth.json |
 | `/router-status` | Endpoint, masked key, model count |
+| `/router-config` | Interactive settings panel (baseUrl, reasoning) |
 | `/router-reasoning` | Toggle thinking levels on router models |
 | `/router-model [search]` | Search/select a router model |
 

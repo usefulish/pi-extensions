@@ -2,7 +2,7 @@ import { assert } from "chai";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { DEFAULTS } from "./helpers";
-import { applyRows, buildRows, ConfigPanelModel, kindValue, makeOnAction, type PanelAction } from "../lib/config-panel";
+import { buildRows, ConfigPanelModel, kindValue, makeOnAction, type PanelAction } from "../lib/config-panel";
 
 describe("config-panel", () => {
   it("buildRows covers server, discovery, gateway, gateways, identity, peers, ui groups", () => {
@@ -66,60 +66,10 @@ describe("config-panel", () => {
     assert.isTrue(upRow.mask, "upstream token row must be masked");
   });
 
-  it("toggle row set flips the underlying config value", () => {
-    const cfg = DEFAULTS();
-    const groups = buildRows(cfg);
-    const row = groups[0]!.rows.find((r) => r.key === "server.enabled")!;
-    assert.equal(row.value, false);
-    row.set(true);
-    assert.equal(cfg.server.enabled, true);
-  });
 
-  it("row.set also updates row.value (toggles render the new state)", () => {
-    // Regression: before the fix, row.value stayed stale so toggling looked dead.
-    const cfg = DEFAULTS();
-    const groups = buildRows(cfg);
-    const row = groups[0]!.rows.find((r) => r.key === "server.enabled")!;
-    assert.equal(row.value, false);
-    row.set(true);
-    assert.equal(row.value, true, "row.value must track the backing config");
-    row.set(false);
-    assert.equal(row.value, false);
-    assert.equal(cfg.server.enabled, false);
-  });
 
-  it("number row set coerces strings and rejects garbage", () => {
-    const cfg = DEFAULTS();
-    const groups = buildRows(cfg);
-    const row = groups[0]!.rows.find((r) => r.key === "server.port")!;
-    row.set("9933");
-    assert.equal(cfg.server.port, 9933);
-    row.set("not-a-number");
-    assert.equal(cfg.server.port, 9933); // keeps prior value
-  });
 
-  it("string row set updates the config", () => {
-    const cfg = DEFAULTS();
-    const groups = buildRows(cfg);
-    // Gateways group added between gateway and identity (0.6.0):
-    // server(10) + discovery(6) + gateway(7) + gateways(0) = index 23.
-    const row = groups[4]!.rows.find((r) => r.key === "selfIdentity")!;
-    row.set("session-a");
-    assert.equal(cfg.selfIdentity, "session-a");
-  });
 
-  it("applyRows applies every row onto the config the rows were built from", () => {
-    const cfg = DEFAULTS();
-    const groups = buildRows(cfg);
-    // Mutate some row values.
-    groups[0]!.rows.find((r) => r.key === "server.enabled")!.value = true;
-    groups[0]!.rows.find((r) => r.key === "server.port")!.value = 9944;
-    groups[4]!.rows.find((r) => r.key === "selfIdentity")!.value = "session-b";
-    applyRows(cfg, groups);
-    assert.equal(cfg.server.enabled, true);
-    assert.equal(cfg.server.port, 9944);
-    assert.equal(cfg.selfIdentity, "session-b");
-  });
 
   it("gateway rows materialize discovery.gateway on edit (enabled toggle)", () => {
     const cfg = DEFAULTS();
@@ -132,32 +82,7 @@ describe("config-panel", () => {
     assert.equal((cfg.discovery.gateway as { enabled: boolean }).enabled, true);
   });
 
-  it("masked rows render no raw secret (display only)", () => {
-    const cfg = DEFAULTS();
-    cfg.discovery.gateway = { enabled: true, url: "http://g", token: "supersecret" };
-    const model = new ConfigPanelModel(buildRows(cfg), null);
-    // Navigate to gateway.token (server 10 + discovery 6 + gateway 2 = index 18).
-    for (let i = 0; i < 18; i++) model.handleInput("\u001b[B");
-    const out = model.render(80).join("\n");
-    assert.ok(!out.includes("supersecret"), "raw token must not appear");
-    assert.match(out, /••••/);
-    // row.value still carries the real secret for persistence
-    const tokenRow = buildRows(cfg)[2]!.rows.find((r) => r.key === "gateway.token")!;
-    assert.equal(tokenRow.value, "supersecret");
-  });
 
-  it("empty submit on a masked row keeps the existing secret (no wipe)", () => {
-    const cfg = DEFAULTS();
-    cfg.discovery.gateway = { enabled: true, url: "http://g", token: "supersecret" };
-    const model = new ConfigPanelModel(buildRows(cfg), null);
-    model.onChanged = () => { model.dirty = true; };
-    // Navigate to gateway.token (server 10 + discovery 6 + gateway 2 = index 18).
-    for (let i = 0; i < 18; i++) model.handleInput("\u001b[B");
-    model.handleInput("\r"); // start edit
-    model.handleInput("\r"); // submit EMPTY → must keep the secret
-    assert.equal(cfg.discovery.gateway!.token, "supersecret", "empty submit keeps the token");
-    assert.isFalse(model.dirty, "no change recorded");
-  });
 
   it("action rows run the provided action", async () => {
     const cfg = DEFAULTS();
@@ -198,7 +123,7 @@ describe("config-panel", () => {
     const model = new ConfigPanelModel(buildRows(cfg, actions), null);
     // Use the SAME handler factory openConfigPanel uses — deleting the
     // setGroups rebuild inside makeOnAction must fail this test.
-    model.onAction = makeOnAction(model, cfg, actions, () => {});
+    model.onAction = makeOnAction(model, cfg, buildRows, actions, () => {});
     // No gateway rows yet.
     assert.ok(!model.groups[3].rows.some((r) => r.key.startsWith("gw.")), "no gateway rows before add");
     // Navigate to the add-gateway action row: server(10)+discovery(6)+gateway(7) = index 23.

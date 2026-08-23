@@ -29,7 +29,7 @@ import {
 import { A2AServer, type SessionRunner } from "./lib/server";
 import { formatPeers, listPeers } from "./lib/discovery";
 import { activityLine, activityStatusLine, activityToText, classifyLine, preview, type InboundActivity } from "./lib/activity";
-import { openConfigPanel, type PanelAction } from "./lib/config-panel";
+import { openPanel, type PanelAction } from "./lib/config-panel";
 
 import { Container, Text } from "@earendil-works/pi-tui";
 
@@ -689,11 +689,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
         },
       };
 
-      await openConfigPanel({
-        ctx: ectx,
-        cfg: workingCfg,
-        actions,
-        onSave: (saved, editedKeys) => {
+      await openPanel(ectx, workingCfg, actions, (saved, editedKeys) => {
           if (!saved) return;
           const afterPeers = JSON.stringify(workingCfg.peers);
           const gatewayChanged =
@@ -761,7 +757,6 @@ export default function a2aExtension(pi: ExtensionAPI): void {
               }
             })();
           }
-        },
       });
     },
   });

@@ -46,6 +46,22 @@ Once logged in, models populate via catalog refresh and `/model` shows them:
 | `COMMAND_CODE_API_KEY` | — | API key (overrides `/login`; read by catalog refresh) |
 | `COMMAND_CODE_BASE_URL` | `https://api.commandcode.ai/provider/v1` | Override the base URL (must include `/v1`; chat completions POST to `<baseUrl>/chat/completions`) |
 
+### settings.json (base URL)
+
+The endpoint URL lives in `settings.json` under `commandcode.baseUrl`
+(precedence: env > repo `.pi/settings.json` > global `~/.pi/agent/settings.json` >
+default). Edit it interactively:
+
+```
+/commandcode-config
+```
+
+Arrow keys navigate, Enter edits, Esc saves — the panel re-registers the provider
+at the new endpoint and refreshes the model catalog; pick models with `/model`.
+In non-TUI mode (or with the `show` arg) the command prints a config summary.
+The API key is **never** stored in settings.json — it lives in `auth.json` via
+`/login commandcode` or the env var.
+
 ## How it works
 
 1. On startup, registers the `commandcode` provider with `api: "openai-completions"`.

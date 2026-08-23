@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 — 2026-08-22
+
+### Changed
+
+- **Config panel kernel extracted to `@bacnh85/pi-config-panel`.** The
+  generic TUI shell (`PanelRow`/`PanelGroup`/`PanelAction`, `ConfigPanelModel`,
+  `openConfigPanel`, inline editing, masking, group windowing) now lives in a
+  shared library package; pi-a2a keeps only its A2A row builder (`buildRows`)
+  and opens the panel via `openPanel()`. No behavior change — the kernel is
+  byte-identical apart from the configurable panel `title`.
+
 ## 0.6.3 — 2026-08-21
 
 ### Changed
