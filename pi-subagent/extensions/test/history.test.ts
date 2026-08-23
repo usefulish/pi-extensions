@@ -85,6 +85,16 @@ describe("history registry", () => {
     assert.equal(read.find((e) => e.id === "t3")!.status, "interrupted");
   });
 
+  it("keeps live entries running when excluded (session reload)", () => {
+    appendHistory(dir, makeEntry({ id: "bg-live", status: "running" }));
+    appendHistory(dir, makeEntry({ id: "bg-dead", status: "running" }));
+    const changed = markInterruptedOnRestart(dir, new Set(["bg-live"]));
+    assert.equal(changed, 1);
+    const read = readHistory(dir);
+    assert.equal(read.find((e) => e.id === "bg-live")!.status, "running"); // still in-process
+    assert.equal(read.find((e) => e.id === "bg-dead")!.status, "interrupted");
+  });
+
   it("trims to max entries, keeping most recent", () => {
     for (let i = 0; i < 10; i++) {
       appendHistory(dir, makeEntry({ id: `t${i}`, completedAt: 1000 + i }));

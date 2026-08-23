@@ -89,12 +89,15 @@ export function findHistory(piDir: string, id: string): HistoryEntry | undefined
  * On session start, mark any `running` entries from a prior session as
  * `interrupted`. We cannot resume them (in-process SDK sessions don't survive
  * a restart). Honest about the architectural ceiling.
+ *
+ * `excludeIds` skips entries still live in this process (e.g. background tasks
+ * that keep running across a session reload — only shutdown aborts them).
  */
-export function markInterruptedOnRestart(piDir: string): number {
+export function markInterruptedOnRestart(piDir: string, excludeIds: ReadonlySet<string> = new Set()): number {
   const entries = readHistory(piDir);
   let changed = 0;
   for (const e of entries) {
-    if (e.status === "running") {
+    if (e.status === "running" && !excludeIds.has(e.id)) {
       e.status = "interrupted";
       changed++;
     }

@@ -565,6 +565,14 @@ export function validateExecutionRequest(
 ): ValidationError[] {
   const errors: ValidationError[] = [];
 
+  // Timeout (single/parallel/chain share one requested timeout)
+  if (options.timeout !== undefined) {
+    const t = normalizeTimeout({ requested: options.timeout });
+    if (t.error) {
+      errors.push({ field: "timeout", message: t.error });
+    }
+  }
+
   // Agent name
   if (options.agentName !== undefined) {
     if (typeof options.agentName !== "string" || options.agentName.trim().length === 0) {

@@ -413,7 +413,9 @@ export function getFinalOutput(messages: Message[]): string {
       if (part.type === "text" && part.text.trim()) texts.push(part.text);
     }
     if (texts.length === 0) continue;
-    return texts.join("");
+    // Join with a newline so interleaved text segments (text around toolCall
+    // parts in one message) stay separated instead of gluing "…done.Next step…".
+    return texts.join("\n");
   }
   return "";
 }

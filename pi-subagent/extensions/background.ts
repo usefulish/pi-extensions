@@ -166,6 +166,19 @@ export function startBackgroundTask(input: StartBackgroundInput): StartBackgroun
   };
   backgroundTasks.set(taskId, bgTask);
 
+  // Record a running entry so a crash mid-run shows as "interrupted" after
+  // restart (recordHistory at completion upserts by id and replaces it).
+  try {
+    appendHistory(join(deps.ctx.cwd, CONFIG_DIR_NAME), {
+      id: taskId,
+      agent,
+      task,
+      status: "running",
+      startedAt,
+      background: true,
+    });
+  } catch { /* history file not writable — non-fatal */ }
+
   // Run detached — the parent does NOT await this.
   void deps
     .runOne(
