@@ -6,6 +6,8 @@ export interface RouterModelRaw {
   id: string;
   object?: string;
   owned_by?: string;
+  context_length?: unknown;
+  max_output_tokens?: unknown;
   [key: string]: unknown;
 }
 
@@ -174,9 +176,30 @@ export function mapModel(raw: RouterModelRaw, enableReasoning: boolean): PiModel
   const caps = raw.capabilities as
     | { contextWindow?: unknown; maxOutput?: unknown; vision?: unknown }
     | undefined;
-  const override = lookupContextOverride(raw.id);
-  const contextWindow = override.contextWindow ?? parsePositiveInt(caps?.contextWindow) ?? FALLBACK_CONTEXT_WINDOW;
-  const maxTokens = override.maxTokens ?? parsePositiveInt(caps?.maxOutput) ?? FALLBACK_MAX_TOKENS;
+  // Context/max-output resolution, single-tier provenance: omniroute-style
+  // top-level `context_length`/`max_output_tokens` are authoritative for their
+  // own field; when a router reports either top-level field, ALL numbers come
+  // from the router (capabilities.* fills the missing one) and CONTEXT_OVERRIDES
+  // is bypassed entirely. The override table only corrects 9router's on-disk
+  // DEFAULT_CAPABILITIES floor for responses with NO top-level fields — never
+  // mixing a stale override with router truth. See also:
+  // pi-commandcode/extensions/lib/client.ts#mapModel (same ordering).
+  const topLevelContext = parsePositiveInt(raw.context_length);
+  const topLevelMax = parsePositiveInt(raw.max_output_tokens);
+  // Gate on raw field PRESENCE (null/undefined = absent), not parse success: a
+  // gateway that emits a present-but-invalid value (0, "unknown") must still
+  // suppress CONTEXT_OVERRIDES so the stale override never mixes with router
+  // truth; the unparseable value itself falls through to caps/fallback below.
+  const hasTopLevel =
+    (raw.context_length !== undefined && raw.context_length !== null) ||
+    (raw.max_output_tokens !== undefined && raw.max_output_tokens !== null);
+  const override = hasTopLevel ? {} : lookupContextOverride(raw.id);
+  const contextWindow =
+    topLevelContext ??
+    (override.contextWindow ?? parsePositiveInt(caps?.contextWindow) ?? FALLBACK_CONTEXT_WINDOW);
+  const maxTokens =
+    topLevelMax ??
+    (override.maxTokens ?? parsePositiveInt(caps?.maxOutput) ?? FALLBACK_MAX_TOKENS);
   const inputTypes: ("text" | "image")[] = caps?.vision ? ["text", "image"] : ["text"];
 
   const compat = {
@@ -201,7 +224,11 @@ export function mapModel(raw: RouterModelRaw, enableReasoning: boolean): PiModel
 }
 
 function parsePositiveInt(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.floor(value);
+  // Accept numeric strings ("1048576") — heterogeneous OpenAI-compat gateways
+  // may serialize context_length/max_output_tokens as strings. Invalid values
+  // (NaN, <=0, non-numeric text, null) fall through to the next tier.
+  const n = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
+  if (typeof n === "number" && Number.isFinite(n) && n > 0) return Math.floor(n);
   return undefined;
 }
 

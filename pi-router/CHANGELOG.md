@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.1 — 2026-08-25
+
+### Fixed
+
+- **Context window under-reported via router aggregation**: routers that
+  forward OpenAI-compat upstream catalogs (e.g. omniroute) report context
+  as top-level `context_length` / `max_output_tokens`, not
+  `capabilities.contextWindow`. `mapModel` now reads `context_length` /
+  `max_output_tokens` first (1508/1550 live models carry it), so
+  `meta/muse-spark-1.2-contributor` and every other routed model no longer
+  collapses to the 128K fallback. The on-disk `CONTEXT_OVERRIDES` table
+  (fixes 9router's 200K floor for `glm-5.2`/`deepseek-v4`) now applies only
+  to responses with NO top-level fields (a `null` or `undefined`
+  `context_length`/`max_output_tokens` counts as absent) — it cannot inflate a
+  router that truthfully reports a smaller `context_length`, and a partial
+  presence of one top-level field never mixes a stale override into the other
+  (provenance stays single-tier). It still intentionally overrides
+  `capabilities.*` for 9router-shape routers until that table is refreshed.
+  Same ordering as `pi-commandcode` 0.1.6.
+
 ## 1.1.0 — 2026-08-22
 
 ### Added

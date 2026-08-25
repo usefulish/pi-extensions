@@ -279,6 +279,70 @@ describe("client", () => {
     assert.equal(xhigh("claude-haiku-4.5"), "xhigh"); // 4.5 < 4.6 — budget boundary
     assert.equal(xhigh("claude-3-5-haiku-20241022"), "xhigh"); // dated id, still 3.5 budget
   });
+
+  it("mapModel reads top-level context_length / max_output_tokens (omniroute shape)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel(
+      { id: "cmd/meta/muse-spark-1.2-contributor", context_length: 1048576, max_output_tokens: 131072, capabilities: { vision: true } } as never,
+      false,
+    );
+    assert.equal(m.contextWindow, 1048576);
+    assert.equal(m.maxTokens, 131072);
+  });
+
+  it("top-level context_length is authoritative over the override table (no inflation)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // zai-coding/glm-5.2 has a 1M override — a stale 1M must not inflate a
+    // router that truthfully reports a smaller window at the top level.
+    const m = mapModel({ id: "zai-coding/glm-5.2", context_length: 256000, capabilities: {} } as never, false);
+    assert.equal(m.contextWindow, 256000);
+  });
+
+  it("one top-level field gates the override for the OTHER field (no mixed provenance)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // Direction A: context_length present, max_output_tokens absent — the stale
+    // 131072 override must NOT apply over the router's truthful capabilities.maxOutput.
+    const a = mapModel({ id: "zai-coding/glm-5.2", context_length: 256000, capabilities: { maxOutput: 32768 } } as never, false);
+    assert.equal(a.contextWindow, 256000);
+    assert.equal(a.maxTokens, 32768, "override maxTokens bypassed when any top-level field is present");
+    // Direction B: max_output_tokens present, context_length absent — stale 1M
+    // override must NOT override a truthful capabilities.contextWindow.
+    const b = mapModel({ id: "zai-coding/glm-5.2", max_output_tokens: 65536, capabilities: { contextWindow: 262144 } } as never, false);
+    assert.equal(b.contextWindow, 262144, "override contextWindow bypassed when any top-level field is present");
+    assert.equal(b.maxTokens, 65536);
+  });
+
+  it("numeric-string top-level fields are parsed (heterogeneous gateways)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "cmd/meta/muse-spark-1.2-contributor", context_length: "1048576", max_output_tokens: "131072" } as never, false);
+    assert.equal(m.contextWindow, 1048576);
+    assert.equal(m.maxTokens, 131072);
+  });
+
+  it("present-but-invalid top-level values still suppress the override (no resurrection)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // context_length present with 0 → override must NOT apply; value falls to caps.
+    const zero = mapModel({ id: "zai-coding/glm-5.2", context_length: 0, capabilities: { contextWindow: 262144, maxOutput: 32768 } } as never, false);
+    assert.equal(zero.contextWindow, 262144, "0 context_length suppresses the 1M override");
+    assert.equal(zero.maxTokens, 32768);
+    // "unknown" string present → override suppressed, falls through to caps.
+    const unk = mapModel({ id: "zai-coding/glm-5.2", context_length: "unknown", capabilities: { contextWindow: 262144 } } as never, false);
+    assert.equal(unk.contextWindow, 262144);
+  });
+
+  it("explicit null top-level fields count as absent (override still applies for 9router)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "zai-coding/glm-5.2", context_length: null, max_output_tokens: null, capabilities: { contextWindow: 128000, maxOutput: 8192 } } as never, false);
+    assert.equal(m.contextWindow, 1_000_000, "null top-level = absent → GLM-5.2 override applies");
+    assert.equal(m.maxTokens, 131_072);
+  });
+
+  it("9router capabilities.contextWindow still honored when no top-level field", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "generic/model-a", capabilities: { contextWindow: 200000, maxOutput: 16384 } } as never, false);
+    assert.equal(m.contextWindow, 200000);
+    assert.equal(m.maxTokens, 16384);
+  });
 });
 
 // ── provider registration shape ──────────────────────────────────────────────
