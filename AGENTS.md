@@ -26,7 +26,8 @@ into the Pi coding agent, each in its own npm package under `@bacnh85/`.
 | **pi-config-panel** | 0.1.0 | Shared interactive config-panel kernel (library) — arrow-key toggle/edit overlay panels (`PanelRow`/`PanelGroup` + `ConfigPanelModel` TUI shell) via `ctx.ui.custom`; powers `/a2a-config`, `/commandcode-config`, `/router-config`. |
 | **pi-notebooklm** | 0.1.8 | Google NotebookLM — notebooks, sources, chat, research, and Studio artifacts via CLI bridge. |
 | **pi-obsidian** | 0.8.13 | Obsidian vault integration for Pi. |
-| **pi-plan** | 0.10.4 | Plan mode with read-only gating and plan → implement → verify → review workflow; fallback model chain on overload. |
+| **pi-advisor** | 0.1.0 | OMP-style automatic advisor — a second model reviews each settled turn and injects severity-routed notes (nit card / concern steer, immune-turn cooldown, emission guard); plus the on-demand advisor consult moved from pi-plan. |
+| **pi-plan** | 0.11.0 | Plan mode with read-only gating and plan → implement → verify → review workflow; fallback model chain on overload. |
 | **pi-ponytail** | 0.1.10 | Lazy senior dev mode — YAGNI/stdlib-first coding discipline. Fork of [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail). |
 | **pi-review** | 0.2.8 | Isolated read-only code review with corrected same-session fallback. |
 | **pi-rtk** | 0.1.12 | Bash command token rewriting through RTK. |
@@ -52,6 +53,7 @@ pi-extensions/
   pi-a2a/               # TS extension + lib (protocol/client/server/config/security/persistence/registry/mdns/discovery/activity/config-panel rows) for A2A Protocol v1.0
 pi-config-panel/      # TS library package — shared config-panel kernel (no pi field; consumed as a dependency)
   pi-plan/              # TS extension for plan mode + workflow integration
+  pi-advisor/            # TS extension — OMP-style automatic advisor (turn-end reviewer + consult tool)
   pi-subagent/          # TS extension for isolated SDK subagents
   pi-review/            # TS extension for isolated/local code review
   pi-fff/               # TS extension for FFF-powered find/grep/autocomplete
@@ -146,6 +148,7 @@ cd pi-<name> && npm test
 # pi-web:        cd extensions && mocha                (mocha + tsx, ESM)
 # pi-munin:      npx mocha                             (mocha + tsx)
 # pi-plan:       cd extensions && mocha                (mocha + tsx)
+# pi-advisor:    cd extensions && mocha                (mocha + tsx)
 # pi-subagent:   cd extensions && mocha                (mocha + tsx)
 # pi-review:     cd extensions && mocha                (mocha + tsx)
 # pi-rtk:        npm pack --dry-run                    (packaging check)

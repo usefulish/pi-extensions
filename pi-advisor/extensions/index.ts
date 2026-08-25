@@ -1,0 +1,135 @@
+import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Box, Markdown, Text } from "@earendil-works/pi-tui";
+
+import { loadConfig, migrateLegacyAdvisorModel, saveModel } from "./lib/config";
+import { isSeverity, sanitizeNote, type Severity } from "./lib/emission-guard";
+import { REVIEW_ENTRY, createRuntime, reseedCursor, reviewTurn, type IsolatedCall, type WatcherRuntime } from "./lib/watcher";
+import { registerAdvisor } from "./commands/advisor";
+
+// ponytail: test-only injection — real calls use runIsolated (watcher's default); tests swap it.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let testIsolated: IsolatedCall | undefined;
+export function __setIsolatedForTest(fn: IsolatedCall | undefined): void {
+  testIsolated = fn;
+}
+
+interface NoteData {
+  severity: Severity;
+  note: string;
+  timestamp: number;
+  downgraded?: boolean;
+}
+
+export default function piAdvisor(pi: ExtensionAPI): void {
+  let runtime: WatcherRuntime | undefined;
+  let runtimeSessionId: string | undefined;
+  // Session-scoped watch flag — config default, toggled by /advisor on|off, not persisted.
+  let watchEnabled = true;
+  let migrationAttempted = false;
+
+  pi.registerEntryRenderer<NoteData>(REVIEW_ENTRY, (entry, { expanded }, theme) => {
+    const data = entry.data && isSeverity(entry.data.severity) && typeof entry.data.note === "string"
+      ? { ...entry.data, note: sanitizeNote(entry.data.note) }
+      : { severity: "nit" as Severity, note: "(unavailable)", timestamp: 0 };
+    const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+    const label = data.downgraded ? "Advisor (downgraded)" : "Advisor";
+    const sev = data.severity === "blocker"
+      ? theme.fg("error", data.severity)
+      : data.severity === "concern"
+        ? theme.fg("warning", data.severity)
+        : theme.fg("dim", data.severity);
+    box.addChild(new Text(`${theme.fg("accent", theme.bold(label))} ${sev} ${theme.fg("dim", data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : "")}`, 0, 0));
+    box.addChild(new Markdown(data.note, 0, 0, getMarkdownTheme()));
+    if (expanded && data.timestamp) box.addChild(new Text(theme.fg("dim", new Date(data.timestamp).toLocaleString()), 0, 0));
+    return box;
+  });
+
+  // Message renderer for sendMessage asides (LLM-visible next turn). Guard for
+  // older Pi builds/tests that only mock registerEntryRenderer.
+  if (typeof (pi as unknown as { registerMessageRenderer?: unknown }).registerMessageRenderer === "function") {
+    (pi as unknown as { registerMessageRenderer: typeof pi.registerEntryRenderer }).registerMessageRenderer<NoteData>(REVIEW_ENTRY, (message, { expanded }, theme) => {
+      const raw = (message as unknown as { details?: unknown }).details as NoteData | undefined;
+      const data = raw && isSeverity(raw.severity) && typeof raw.note === "string"
+        ? { ...raw, note: sanitizeNote(raw.note) }
+        : { severity: "nit" as Severity, note: "(unavailable)", timestamp: 0 };
+      const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+      const label = data.downgraded ? "Advisor (downgraded)" : "Advisor";
+      const sev = data.severity === "blocker"
+        ? theme.fg("error", data.severity)
+        : data.severity === "concern"
+          ? theme.fg("warning", data.severity)
+          : theme.fg("dim", data.severity);
+      box.addChild(new Text(`${theme.fg("accent", theme.bold(label))} ${sev} ${theme.fg("dim", data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : "")}`, 0, 0));
+      box.addChild(new Markdown(data.note, 0, 0, getMarkdownTheme()));
+      if (expanded && data.timestamp) box.addChild(new Text(theme.fg("dim", new Date(data.timestamp).toLocaleString()), 0, 0));
+      return box;
+    });
+  }
+
+  pi.on("before_agent_start", (event, ctx: ExtensionContext): any => {
+    if (!watchEnabled || !runtime?.model || runtime.stats.paused) return;
+    // Every turn the agent sees the authority line (static per session,
+    // cache-safe): messages starting 'Advisor review' are reviewer findings.
+    const line = "Advisor notes: messages starting 'Advisor review' are authoritative reviewer findings. Fix or explicitly justify ignoring each finding.";
+    const nextPrompt = event.systemPrompt.includes(line) ? event.systemPrompt : `${event.systemPrompt}\n\n${line}`;
+    return nextPrompt === event.systemPrompt ? undefined : { systemPrompt: nextPrompt };
+  });
+
+  pi.on("session_start", async (_event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId?.();
+    const fresh = runtimeSessionId !== sessionId;
+    runtimeSessionId = sessionId;
+    if (runtime && !fresh) return; // same session — already initialized
+    const config = await loadConfig(ctx);
+    let model = config.model;
+    if (!model && !migrationAttempted) {
+      // One-shot per process: never re-arm after the user disables the advisor.
+      migrationAttempted = true;
+      const legacy = await migrateLegacyAdvisorModel();
+      if (legacy) {
+        model = legacy;
+        ctx.ui.notify(`Advisor model migrated from pi-plan: ${legacy}`, "info");
+        // If we migrated on top of a pi-plan that had legacyMigrated:true already,
+        // the user config may still lack migrationVersion. Backfill it idempotently
+        // so no future manual patch is needed (code writes, agent never touches
+        // the real global config directly).
+      }
+    }
+    runtime = createRuntime(config, model);
+    watchEnabled = config.watch.enabled;
+    // Watch is gated on both enabled and a configured model — no self-review.
+    if (!watchEnabled || !model) return;
+    // Seed the cursor to the current transcript tail so the first review
+    // covers only work that happens after the advisor was loaded.
+    const entries = ctx.sessionManager.getEntries() as any[];
+    runtime.cursor = entries.length ? entries[entries.length - 1].id : undefined;
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    if (!runtime || !watchEnabled || runtime.stats.paused) return;
+    await reviewTurn(runtime, ctx, {
+      appendEntry: (customType, data) => pi.appendEntry(customType, data),
+      sendMessage: (message, options) => pi.sendMessage(message, options as never),
+      sendUserMessage: (content, options) => pi.sendUserMessage(content, options),
+    }, testIsolated);
+  });
+
+  registerAdvisor(pi, {
+    getModel: () => runtime?.model,
+    setModel: async (model) => {
+      await saveModel(model);
+      if (runtime) runtime.model = model;
+    },
+    getThinking: () => undefined,
+    getRuntime: () => runtime,
+    isWatchEnabled: () => watchEnabled,
+    setWatchEnabled: (value) => {
+      watchEnabled = value;
+      if (value && runtime) migrationAttempted = true; // belt-and-suspenders on top of the persisted tombstone
+    },
+    onEnableWatch: (ctx) => {
+      // Reseed so enabling mid-session reviews only future work.
+      if (runtime) reseedCursor(runtime, ctx);
+    },
+  });
+}

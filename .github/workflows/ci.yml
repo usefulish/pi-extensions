@@ -47,6 +47,7 @@ jobs:
             pi-web: pi-web/**
             pi-munin: pi-munin/**
             pi-plan: pi-plan/**
+            pi-advisor: pi-advisor/**
             pi-subagent: pi-subagent/**
             pi-review: pi-review/**
             pi-fff: pi-fff/**
@@ -84,6 +85,7 @@ jobs:
               { pkg: 'pi-web', cmd: 'npm ci && npm test' },
               { pkg: 'pi-munin', cmd: 'npm ci && npm test' },
               { pkg: 'pi-plan', cmd: 'npm ci && npm test && npm run typecheck' },
+              { pkg: 'pi-advisor', cmd: 'npm ci && npm test && npm run typecheck' },
               { pkg: 'pi-subagent', cmd: 'npm ci && npm test && npm run typecheck' },
               { pkg: 'pi-review', cmd: 'npm ci && npm test && npm run typecheck' },
               { pkg: 'pi-fff', cmd: 'npm ci && npm test' },

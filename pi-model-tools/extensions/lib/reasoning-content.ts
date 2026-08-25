@@ -60,10 +60,15 @@ export function stripReasoningContent(payload: unknown): unknown {
 
 const LEAKED_THINKING_HEADER = /^(Reasoning|Thinking|Chain of Thought)\s*:[^\n]*\n?/i;
 const LEAKED_TOOL_CALL_RE = /`([a-z_]+)\(([^)]*)\)`\s*/g;
+// ponytail: SDK renders this when a thinking model's prior summary is missing — display-only, no behavioral effect.
+const PRIOR_REASONING_PLACEHOLDER_RE = /\(prior reasoning summary unavailable\)\s*/gi;
 
 export function cleanLeakedContent(content: unknown, activeTools: ReadonlySet<string>): unknown {
   if (typeof content !== "string") return content;
   let cleaned = content;
+  if (PRIOR_REASONING_PLACEHOLDER_RE.test(cleaned)) cleaned = cleaned.replace(PRIOR_REASONING_PLACEHOLDER_RE, "");
+  // reset lastIndex for global regex reuse
+  PRIOR_REASONING_PLACEHOLDER_RE.lastIndex = 0;
   if (LEAKED_THINKING_HEADER.test(cleaned)) cleaned = cleaned.replace(LEAKED_THINKING_HEADER, "").trimStart();
   cleaned = cleaned.replace(LEAKED_TOOL_CALL_RE, (match, toolName: string) => activeTools.has(toolName) ? "" : match);
   return cleaned !== content ? cleaned : content;

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 (2026-08-25)
+
+### Fixes
+
+- Suppress `(prior reasoning summary unavailable)` — a display-only placeholder the SDK renders when a thinking model's prior summary isn't carried across turns. No behavioral effect; hidden.
+
 ## 0.6.0 (2026-08-16)
 
 ### Features

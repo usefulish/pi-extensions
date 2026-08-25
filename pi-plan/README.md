@@ -31,7 +31,6 @@ pi --plan
 | `/flow stop` | Abort review and stop the active workflow. |
 | `/handoff <goal>` | Summarize the session into a reviewable prompt and start a focused new Pi session linked to the parent. |
 | `/rewind` | Select a saved prompt checkpoint and restore its code, conversation, or both. |
-| `/advisor [model hint\|off]` | Configure a transcript-aware strategic advisor with `/model`-style search. |
 | `/btw [query]` | Ask a context-aware side question; completed answers persist as transcript cards. Without a query, reopens the last answer. |
 | `/specs <intent>` | Write a reviewable, spec-first EARS specification and hard-lock workspace writes. |
 | `/specs-approve` | Release the gate and prefill the implementation instruction. |
@@ -75,11 +74,11 @@ Fresh-session replacement is intentionally initiated by `/plan-approve`: extensi
 | Direct source mutators (`edit`, `write`, Serena/Munin mutations) | Hard-blocked with error message |
 | `multi_tool_use.parallel` | Each nested call independently gated |
 
-## Advisor and utility command configuration
+## Utility command configuration
 
-Run `/advisor` to open the same searchable picker as `/model`; type a provider/model hint to filter it. `/advisor provider/model` (or an unambiguous bare model ID) selects immediately, while an unmatched hint opens the picker prefiltered. Use `/advisor off` to disable it. The selected model persists globally in `~/.pi/agent/pi-plan/preferences.json` and is disabled by default.
-
-When configured, the primary agent receives an `advisor` tool and decides when to use it—typically before a consequential approach, after recurring failures, or before completing non-trivial work. The advisor sees Pi's effective session transcript (including compaction summaries and tool results), returns read-only guidance to the primary agent, and does not replace `pi-review`'s Git-scoped review workflow.
+The `advisor` tool and `/advisor` command moved to the separate
+[`@bacnh85/pi-advisor`](../pi-advisor) package in pi-plan 0.11.0 — install it to
+keep the on-demand advisor consult and the new automatic turn-end watch.
 
 Optional Pi settings (global `~/.pi/agent/settings.json` or trusted project `.pi/settings.json`) select the `/btw` model:
 

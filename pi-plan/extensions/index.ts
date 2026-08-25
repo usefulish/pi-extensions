@@ -20,7 +20,6 @@ import { isOverloadError } from "./lib/fallback";
 import { captureRewindCheckpoint, restoreRewindCheckpoint, rewindToFlowBaseline, snapshotUntrackedFiles, validateRewindCheckpoint, type RewindCheckpoint } from "./lib/lifecycle";
 import { BLOCKED_TOOLS, READ_ONLY_TOOLS } from "./lib/plan-tools";
 import { loadUtilityConfig, parseModel } from "./lib/utility-config";
-import { registerAdvisor } from "./commands/advisor";
 import { advanceGoal, DEFAULT_GOAL_MAX_TURNS, registerGoal, type GoalAccessors, type GoalState } from "./commands/goal";
 import { registerBtw } from "./commands/btw";
 import { registerDoctor } from "./commands/doctor";
@@ -111,7 +110,6 @@ interface PlanPreferences {
     string,
     { planThinking: ThinkingLevel; normalThinking: ThinkingLevel }
   >;
-  advisorModel?: string;
   goalModel?: string;
   planModel?: string;
   normalModel?: string;
@@ -412,7 +410,6 @@ async function loadPreferences(): Promise<PlanPreferences | undefined> {
       version: 2,
       defaults: parsed.defaults,
       perModel,
-      advisorModel: typeof parsed.advisorModel === "string" && parsed.advisorModel.trim() ? parsed.advisorModel.trim() : undefined,
       planModel: typeof parsed.planModel === "string" && parsed.planModel.trim() ? parsed.planModel.trim() : undefined,
       normalModel: typeof parsed.normalModel === "string" && parsed.normalModel.trim() ? parsed.normalModel.trim() : undefined,
       fallbackModels: Array.isArray(parsed.fallbackModels)
@@ -515,7 +512,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
   let specGateActive = false;
   let specGatePlanMode = false;
   let specPath: string | undefined;
-  let advisor: { sync(ctx: ExtensionContext): void };
   let goal: GoalState | undefined;
 
   // ── UI helpers ──────────────────────────────────────────────
@@ -1572,27 +1568,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => handlePlanApproval(args, ctx),
   });
 
-  advisor = registerAdvisor(pi, {
-    getModel: () => preferences?.advisorModel,
-    setModel: async (model) => {
-      if (!preferences) throw new Error("Advisor preferences are unavailable.");
-      const previous = preferences.advisorModel;
-      preferences.advisorModel = model;
-      try {
-        await savePreferences(preferences);
-      } catch (error) {
-        preferences.advisorModel = previous;
-        throw error;
-      }
-    },
-    getThinking: () => normalThinking,
-    onAvailabilityChange: (enabled) => {
-      if (!toolsBeforePlan) return;
-      toolsBeforePlan = enabled
-        ? [...new Set([...toolsBeforePlan, "advisor"])]
-        : toolsBeforePlan.filter((tool) => tool !== "advisor");
-    },
-  });
   const goalAccessors: GoalAccessors = {
     getModel: () => preferences?.goalModel,
     setModel: async (model) => {
@@ -1774,7 +1749,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
     } else {
       applyThinking(normalThinking);
     }
-    advisor.sync(ctx);
     updateFooter(ctx);
     clearPlanWidget(ctx);
     installRewindShortcut(ctx);
@@ -1903,7 +1877,6 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       toolsBeforePlan = undefined;
       applyThinking(normalThinking);
     }
-    advisor.sync(ctx);
     updateFooter(ctx);
     persistState();
   });

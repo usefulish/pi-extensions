@@ -1,16 +1,17 @@
 {
-  "name": "@bacnh85/pi-plan",
-  "version": "0.11.0",
-  "description": "Plan mode with read-only gating and plan → implement → verify → review workflow for Pi.",
+  "name": "@bacnh85/pi-advisor",
+  "version": "0.1.0",
+  "description": "Pi extension for an automatic advisor: a second model that reviews each settled turn and injects severity-routed notes, plus an on-demand consult tool.",
+  "type": "module",
   "license": "MIT",
   "publishConfig": {
     "access": "public"
   },
-  "homepage": "https://github.com/bacnh85/pi-extensions/tree/main/pi-plan",
+  "homepage": "https://github.com/bacnh85/pi-extensions/tree/main/pi-advisor",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bacnh85/pi-extensions.git",
-    "directory": "pi-plan"
+    "directory": "pi-advisor"
   },
   "bugs": {
     "url": "https://github.com/bacnh85/pi-extensions/issues"
@@ -18,17 +19,17 @@
   "keywords": [
     "pi-package",
     "pi-extension",
-    "plan-mode",
-    "planning",
-    "reasoning"
+    "advisor",
+    "reviewer",
+    "second-model"
   ],
   "files": [
     "README.md",
     "CHANGELOG.md",
     "extensions/index.ts",
-    "extensions/commands/",
     "extensions/package.json",
-    "extensions/lib/"
+    "extensions/lib",
+    "extensions/commands"
   ],
   "pi": {
     "extensions": [
@@ -46,9 +47,9 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.84.0",
-    "@earendil-works/pi-coding-agent": "^0.84.0",
-    "@earendil-works/pi-tui": "^0.84.0",
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@earendil-works/pi-tui": "^0.84.2",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.19.43",
     "chai": "^4.5.0",

@@ -1,11 +1,22 @@
+# Changelog
+
+## 0.11.0 (2026-08-25)
+
+### Removed
+
+- The `advisor` tool and `/advisor` command moved to the new
+  **`@bacnh85/pi-advisor`** package, which adds OMP-style automatic turn-end
+  reviewing (severity-routed notes with an emission guard) on top of the
+  on-demand consult. Install `@bacnh85/pi-advisor` to keep the feature; your
+  advisor model preference auto-migrates on first start. Remove this package's
+  old advisor before installing pi-advisor to avoid a duplicate tool name.
+
 ## 0.10.6 (2026-08-21)
 
 - Renamed the late-loading-provider signal listener `9router:models-loaded` →
   `router:models-loaded` to match the pi-router rename (was: pi-9router).
   Deferred per-mode model apply now retries on the new event; behavior
   otherwise unchanged.
-
-# Changelog
 
 ## 0.10.5 (2026-08-17)
 
