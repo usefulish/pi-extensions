@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.1.2 — 2026-08-26
+
+### Fixed
+
+- **`glm-cn/glm-5.3` showed 200K instead of 1M** (the user's exact case).
+  Omniroute (a 9router fork) intermittently emits top-level
+  `context_length: 200000, max_output_tokens: 128000` for unprofiled models
+  — its `DEFAULT_CAPABILITIES` floor. `mapModel` previously trusted this
+  pair as router truth (1.1.1 single-tier provenance) and bypassed
+  `CONTEXT_OVERRIDES`. New pair-floor-poison gate: when both top-level
+  fields are parseable AND at/below the 9router DEFAULT_CAPABILITIES floor
+  (200K context, 128K output) AND a verified override exists at/above the
+  floor for each, the override fires for both fields. Above-floor router
+  values stay authoritative (preserves `openrouter/z-ai/glm-5.2:free = 256K`
+  and `opencode-go/kimi-k3 = 1048576/1048576` from the inflation regression
+  1.1.1 fixed). 1.1.1 single-tier back-compat (`Direction A`/`Direction B`
+  tests) preserved by keeping "any present truthful field → override fully
+  bypassed" as the default behavior.
+
+### Added
+
+- **`CONTEXT_OVERRIDES` extended** with verified models.dev entries for
+  under-reported families on the user's omniroute (glm-cn / glmcn /
+  opencode-go / nvidia / aug routes that lack top-level metadata):
+  - `glm-5` / `glm-5.1` / `glm-5-turbo` / `glm-5v-turbo` → 200K / 128K
+  - `glm-4.6` / `glm-4.7` → 200K / 128K
+  - `kimi-k3` → 1M / 128K (specific pattern — `kimi-k2.7-code` real = 262K
+    so a blanket override would inflate it; pi-commandcode 0.1.6 bug class
+    avoided).
+- **Live validation script** (`extensions/test/live-validation.ts`):
+  `cd pi-router && PI_CODING_AGENT_DIR=/tmp/x npx tsx
+  extensions/test/live-validation.ts` runs against the live `/v1/models`
+  endpoint and asserts 14 representative models against models.dev truth
+  (current pass rate: 14/14). One-shot verification, not part of
+  `npm test` (network-dependent).
+
+### Changed
+
+- **`REQUEST_TIMEOUT_MS` 15s → 30s** (one line in `client.ts`): the live
+  full-catalog fetch measures ~10s, leaving the previous 15s budget
+  insufficient under load — aborted refreshes silently kept stale
+  `models-store.json` entries (which is how the user's
+  `glm-cn/glm-5.3 = 200K` persisted through several Pi restarts).
+
+### Verified
+
+- 41/41 unit tests (added 11 new tests covering the floor-aware gate, the
+  pair-poison exception, and the 1.1.1 back-compat guards; all pre-existing
+  tests pass unchanged).
+- `npm run typecheck` clean.
+- 14/14 live validation cases pass against the user's omniroute (172.30.55.22).
+
 ## 1.1.1 — 2026-08-25
 
 ### Fixed

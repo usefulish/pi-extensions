@@ -37,7 +37,7 @@ export type PiModel = {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const REQUEST_TIMEOUT_MS = 15_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 const FALLBACK_CONTEXT_WINDOW = 128_000;
 const FALLBACK_MAX_TOKENS = 4_096;
 
@@ -127,6 +127,13 @@ function detectThinkingFormat(modelId: string): string {
 // which under-reports models with larger windows (e.g. GLM-5.2 = 1M).
 // This table corrects known gaps client-side.
 // Source: https://models.dev/api.json
+// Floor constants: 9router/omniroute's DEFAULT_CAPABILITIES pair (context 200000,
+// output 128000) for unprofiled models. Anything ≤ these on a matched-override
+// model is the router's default-floor stamp, not real metadata — `mapModel`
+// uses these to de-poison without inflating truthful reports above the floor.
+// Cited: 9router capabilities.js DEFAULT_CAPABILITIES (OmniRoute is a 9router fork).
+const DEFAULT_CONTEXT_FLOOR = 200_000;
+const DEFAULT_MAX_FLOOR = 128_000;
 const CONTEXT_OVERRIDES: { pattern: RegExp; contextWindow: number; maxTokens?: number }[] = [
   // GLM-5.2/5.3 only: 1M context, 128K output (models.dev: zhipuai/glm-5.2; GLM-5.3[1m]
   // Coding Plan route + launch coverage report the same window). Lookahead keeps
@@ -134,6 +141,19 @@ const CONTEXT_OVERRIDES: { pattern: RegExp; contextWindow: number; maxTokens?: n
   { pattern: /glm-5\.[23](?!\d)/i, contextWindow: 1_000_000, maxTokens: 131_072 },
   // DeepSeek V4: 1M context (models.dev + 9router codebuddy/nvidia overrides)
   { pattern: /deepseek-v[34]/i, contextWindow: 1_000_000 },
+  // GLM-5.1 / 5 / 5-turbo / 5v-turbo: ~200K context (models.dev zhipuai/zhipuai-coding-plan/opencode-go: 200000–204800),
+  // 128K output. Routes on the user's omniroute (glm-cn/glmcn/opencode-go/aug/nvidia) lack
+  // top-level metadata and fall to the 128K FALLBACK, which under-reports.
+  // Lookahead keeps glm-5.[23] out (covered above) and variant suffixes with their
+  // own distinct windows safe (live catalog reports them above the floor).
+  { pattern: /glm-5(?:\.1|-turbo|v-turbo)?(?![0-9.v-])/i, contextWindow: 200_000, maxTokens: 131_072 },
+  // GLM-4.6 / 4.7: 200K / 128K (models.dev zhipuai/glm-4.6 = 204800; opencode-go glm-4.x = 200000).
+  // Same fallback-under-report pattern.
+  { pattern: /glm-4\.[67](?![0-9.v-])/i, contextWindow: 200_000, maxTokens: 131_072 },
+  // Kimi K3: 1M context (models.dev moonshotai/kimi-k3 = 1048576/131072 across opencode-go/
+  // openrouter/moonshotai-cn). Specific pattern — `kimi-k2.7-code` real = 262K so a
+  // blanket override would inflate it (pi-commandcode 0.1.6 bug class).
+  { pattern: /kimi-k3(?![0-9.v-])/i, contextWindow: 1_048_576, maxTokens: 131_072 },
 ];
 
 function lookupContextOverride(modelId: string): { contextWindow?: number; maxTokens?: number } {
@@ -176,30 +196,79 @@ export function mapModel(raw: RouterModelRaw, enableReasoning: boolean): PiModel
   const caps = raw.capabilities as
     | { contextWindow?: unknown; maxOutput?: unknown; vision?: unknown }
     | undefined;
-  // Context/max-output resolution, single-tier provenance: omniroute-style
-  // top-level `context_length`/`max_output_tokens` are authoritative for their
-  // own field; when a router reports either top-level field, ALL numbers come
-  // from the router (capabilities.* fills the missing one) and CONTEXT_OVERRIDES
-  // is bypassed entirely. The override table only corrects 9router's on-disk
-  // DEFAULT_CAPABILITIES floor for responses with NO top-level fields — never
-  // mixing a stale override with router truth. See also:
-  // pi-commandcode/extensions/lib/client.ts#mapModel (same ordering).
+  // Context/max-output resolution, single-tier provenance with floor-aware
+  // override: top-level `context_length`/`max_output_tokens` are authoritative
+  // for their own field UNLESS the value sits at/below 9router's
+  // DEFAULT_CAPABILITIES floor (200000) for a model whose verified window
+  // exceeds the floor — that signature is the router's registry default stamp,
+  // not real metadata, and the curated override corrects it. Anything above
+  // the floor is never overridden (preserves e.g. openrouter/z-ai/glm-5.2:free
+  // = 256K from the inflation bug 1.1.1 fixed). See also:
+  // pi-commandcode/extensions/lib/client.ts#mapModel (same ordering; no floor
+  // rule there — commandcode reports vendor-official context_length).
   const topLevelContext = parsePositiveInt(raw.context_length);
   const topLevelMax = parsePositiveInt(raw.max_output_tokens);
-  // Gate on raw field PRESENCE (null/undefined = absent), not parse success: a
+  // Raw presence gate (kept for back-compat with the 1.1.1 test contract): a
   // gateway that emits a present-but-invalid value (0, "unknown") must still
   // suppress CONTEXT_OVERRIDES so the stale override never mixes with router
   // truth; the unparseable value itself falls through to caps/fallback below.
   const hasTopLevel =
     (raw.context_length !== undefined && raw.context_length !== null) ||
     (raw.max_output_tokens !== undefined && raw.max_output_tokens !== null);
-  const override = hasTopLevel ? {} : lookupContextOverride(raw.id);
+  const override = lookupContextOverride(raw.id);
+  // Floor-aware gate, per-field: the override fires for a field when (a) no
+  // top-level field is present at all (absent), or (b) a parseable top-level
+  // value sits at/below the known DEFAULT_CAPABILITIES floor AND the
+  // override's value exceeds the floor (otherwise there is nothing to
+  // correct). Per-field reasoning keeps the deepseek-v[34] entry (which
+  // omits maxTokens) from collapsing max to the 4096 fallback when the
+  // router reports a poisoned context alongside a real maxOutput, and keeps
+  // a present-but-unparseable top-level from triggering the override (the
+  // 1.1.1 guarantee: that signals garbage, not router truth).
+  const ctxAbsent = raw.context_length === undefined || raw.context_length === null;
+  const maxAbsent = raw.max_output_tokens === undefined || raw.max_output_tokens === null;
+  const ctxUsable = !ctxAbsent && topLevelContext !== undefined;
+  const maxUsable = !maxAbsent && topLevelMax !== undefined;
+  // Pair-floor-poison gate: the override applies to the model when (a) no
+  // top-level fields are present at all (the router signals nothing — override
+  // fills both), OR (b) the top-level pair exactly matches the omniroute /
+  // 9router DEFAULT_CAPABILITIES signature (context ≤ DEFAULT_CONTEXT_FLOOR
+  // AND max ≤ DEFAULT_MAX_FLOOR, with a verified override at the floor or
+  // above for each). `>=` (not strict `>`) so models whose verified window
+  // equals the floor (e.g. glm-5.1 / glm-4.6 at 200000) still get the max
+  // correction when the router stamps the floor pair — the override is the
+  // verified truth (models.dev) and is never stale below the floor. In all
+  // other cases (any present field carries a truthful router value, or the
+  // pair is only partially the floor stamp), the override is fully bypassed
+  // (1.1.1 single-tier back-compat: presence = "router is signaling, don't
+  // override; fall through to caps"). Per-field rules would break Direction
+  // A/B; the all-or-nothing pair rule preserves the 1.1.1 invariant while
+  // correcting the user's exact case (glm-cn/glm-5.3 stamped with the
+  // 200000/128000 default-floor pair).
+  const ctxFloorPoisoned =
+    ctxUsable &&
+    (topLevelContext as number) <= DEFAULT_CONTEXT_FLOOR &&
+    override.contextWindow !== undefined &&
+    override.contextWindow >= DEFAULT_CONTEXT_FLOOR;
+  const maxFloorPoisoned =
+    maxUsable &&
+    (topLevelMax as number) <= DEFAULT_MAX_FLOOR &&
+    override.maxTokens !== undefined &&
+    override.maxTokens >= DEFAULT_MAX_FLOOR;
+  const pairFloorPoisoned = ctxFloorPoisoned && maxFloorPoisoned;
+  const useOverride = (ctxAbsent && maxAbsent) || pairFloorPoisoned;
+  const ctxFromRouter = !pairFloorPoisoned && ctxUsable ? topLevelContext : undefined;
+  const maxFromRouter = !pairFloorPoisoned && maxUsable ? topLevelMax : undefined;
   const contextWindow =
-    topLevelContext ??
-    (override.contextWindow ?? parsePositiveInt(caps?.contextWindow) ?? FALLBACK_CONTEXT_WINDOW);
+    ctxFromRouter ??
+    (useOverride ? override.contextWindow : undefined) ??
+    parsePositiveInt(caps?.contextWindow) ??
+    FALLBACK_CONTEXT_WINDOW;
   const maxTokens =
-    topLevelMax ??
-    (override.maxTokens ?? parsePositiveInt(caps?.maxOutput) ?? FALLBACK_MAX_TOKENS);
+    maxFromRouter ??
+    (useOverride ? override.maxTokens : undefined) ??
+    parsePositiveInt(caps?.maxOutput) ??
+    FALLBACK_MAX_TOKENS;
   const inputTypes: ("text" | "image")[] = caps?.vision ? ["text", "image"] : ["text"];
 
   const compat = {

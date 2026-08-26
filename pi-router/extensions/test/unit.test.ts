@@ -343,6 +343,120 @@ describe("client", () => {
     assert.equal(m.contextWindow, 200000);
     assert.equal(m.maxTokens, 16384);
   });
+
+  // ── floor-aware override (DEFAULT_CAPABILITIES de-poisoning) ───────────────
+  // Omniroute (9router fork) intermittently emits top-level `context_length: 200000,
+  // max_output_tokens: 128000` — its DEFAULT_CAPABILITIES floor — for unprofiled
+  // models like GLM-5.3. pi-router 1.1.1's single-tier provenance trusted that pair
+  // as router truth, bypassing the verified override. The fix de-poisons the
+  // floor pair only when an override exceeds the floor; above-floor values are
+  // still router-trusted (no inflation of e.g. openrouter/z-ai/glm-5.2:free = 256K).
+
+  it("floor pair on a matched-override model lets the override win (the user's exact case)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // Live omniroute response shape for glm-cn/glm-5.3 when its capabilities cache is warm.
+    const m = mapModel({ id: "glm-cn/glm-5.3", context_length: 200000, max_output_tokens: 128000 } as never, false);
+    assert.equal(m.contextWindow, 1_000_000);
+    assert.equal(m.maxTokens, 131_072);
+  });
+
+  it("floor value without an override entry stays verbatim (genuine 200K models unaffected)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "some/200k-model", context_length: 200000, max_output_tokens: 128000 } as never, false);
+    assert.equal(m.contextWindow, 200000, "no override match → router value kept");
+    assert.equal(m.maxTokens, 128000);
+  });
+
+  it("above-floor truthful values stay verbatim (no inflation of e.g. glm-5.2:free)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // openrouter/z-ai/glm-5.2:free truthfully reports 256000 — above floor, override suppressed.
+    const m = mapModel({ id: "openrouter/z-ai/glm-5.2:free", context_length: 256000, max_output_tokens: 230400 } as never, false);
+    assert.equal(m.contextWindow, 256000);
+    assert.equal(m.maxTokens, 230400);
+  });
+
+  it("deepseek-v4 floor pair: override has no maxTokens so pair rule doesn't fire → router values kept", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // deepseek-v[34] override has only contextWindow (no maxTokens). When omniroute
+    // stamps the floor pair (200000/128000), maxFloorPoisoned is false (override.max
+    // undefined), so the strict pair rule doesn't fire and the override is bypassed
+    // (1.1.1 single-tier back-compat). Both fields stay router. The override's value
+    // for ctx is correct (1M) but cannot apply until either (a) the override entry
+    // gains maxTokens so the pair rule matches, or (b) omniroute drops the top-level
+    // fields entirely (next test) — then override fires.
+    const m = mapModel({ id: "opencode-go/deepseek-v4-flash", context_length: 200000, max_output_tokens: 128000 } as never, false);
+    assert.equal(m.contextWindow, 200_000, "override bypassed (pair rule needs both fields poisoned)");
+    assert.equal(m.maxTokens, 128_000);
+  });
+
+  it("deepseek-v4 metadata-less path (no top-level) → override 1M/384K", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // When omniroute omits top-level fields entirely for opencode-go/deepseek-v4-flash,
+    // both fields are absent → useOverride=true → override fires for ctx only
+    // (no maxTokens in entry → falls to caps.maxOutput=undefined → FALLBACK 4096).
+    // The 1M context correction is the critical fix; the 4096 max is the pre-existing
+    // behavior (override entry has always omitted maxTokens — a separate gap if the
+    // user wants 384K output, add maxTokens to the override entry).
+    const m = mapModel({ id: "opencode-go/deepseek-v4-flash" } as never, false);
+    assert.equal(m.contextWindow, 1_000_000);
+    assert.equal(m.maxTokens, 4_096, "FALLBACK (override has no maxTokens entry — pre-existing)");
+  });
+
+  it("above-floor glm-5.1 value is not overridden (200000 is the override's own value too)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // 204800 from router (matches Z.ai official) — above the floor, override suppressed.
+    const m = mapModel({ id: "glm-cn/glm-5.1", context_length: 204800, max_output_tokens: 131072 } as never, false);
+    assert.equal(m.contextWindow, 204800);
+    assert.equal(m.maxTokens, 131072);
+  });
+
+  it("floor poison on glm-5.1 (router stale 200000) → override 200000/131072 still applied", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // When router reports the 9router floor (200000/128000) for glm-5.1, override fires.
+    // Both fields equal the floor so both are corrected; values match the override entry.
+    const m = mapModel({ id: "glm-cn/glm-5.1", context_length: 200000, max_output_tokens: 128000 } as never, false);
+    assert.equal(m.contextWindow, 200_000);
+    assert.equal(m.maxTokens, 131_072);
+  });
+
+  it("kimi-k3 floor poison → override 1M/131072 (no blanket-override inflation of kimi-k2.7)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "opencode-go/kimi-k3", context_length: 200000, max_output_tokens: 128000 } as never, false);
+    assert.equal(m.contextWindow, 1_048_576);
+    assert.equal(m.maxTokens, 131_072);
+  });
+
+  it("kimi-k2.7-code above floor stays verbatim (specific kimi-k3 pattern does not match)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // Real kimi-k2.7-code context = 262144 (above floor) — the kimi-k3 pattern must not match.
+    const m = mapModel({ id: "opencode-go/kimi-k2.7-code", context_length: 262144, max_output_tokens: 262144 } as never, false);
+    assert.equal(m.contextWindow, 262144);
+    assert.equal(m.maxTokens, 262144);
+  });
+
+  it("glm-4.6 floor poison → override 200K/131072", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "glm-cn/glm-4.6", context_length: 200000, max_output_tokens: 128000 } as never, false);
+    assert.equal(m.contextWindow, 200_000);
+    assert.equal(m.maxTokens, 131_072);
+  });
+
+  it("no top-level + no caps → override applies (kimi-k3 metadata-less path)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // Live omniroute shape when glm-cn/kimi-k3 has no top-level fields at all.
+    const m = mapModel({ id: "opencode-go/kimi-k3" } as never, false);
+    assert.equal(m.contextWindow, 1_048_576);
+    assert.equal(m.maxTokens, 131_072);
+  });
+
+  it("present-but-invalid ctx (0) still suppresses the override (no resurrection)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    // 0 fails parsePositiveInt (n>0) → undefined → ctxFloorPoisoned false → override suppressed.
+    // Falls through to caps (262144) — preserves the 1.1.1 guarantee.
+    const m = mapModel({ id: "zai-coding/glm-5.2", context_length: 0, capabilities: { contextWindow: 262144, maxOutput: 32768 } } as never, false);
+    assert.equal(m.contextWindow, 262144);
+    assert.equal(m.maxTokens, 32768);
+  });
 });
 
 // ── provider registration shape ──────────────────────────────────────────────
