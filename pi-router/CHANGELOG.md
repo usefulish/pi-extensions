@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.1.3 — 2026-08-26
+
+### Fixed
+
+- **`/tree` branch summary and `/handoff` returned HTTP 400** when running
+  router models served via the command-code upstream (e.g.
+  `command-code/MiniMaxAI/MiniMax-M3`):
+  `Invalid option: expected one of "low"|"medium"|"high"|"xhigh"|"max" at "params.reasoning_effort"`.
+  The router's command-code executor forwards `reasoning_effort:"none"`
+  untranslated and Command Code's API rejects anything outside
+  `low|medium|high|xhigh|max`. Background summarization calls
+  (`/tree` → `generateBranchSummary`, `/handoff` → `runIsolated` without
+  `reasoning`) hit the SDK's no-level fallback which sends
+  `thinkingLevelMap.off` verbatim; pi-router advertised `off:"none"` for
+  the minimax format. New `NO_DISABLE_PREFIX` override in
+  `getThinkingLevelMap`: model ids matching `/^(command-?code|cmd)[-/]/i`
+  now have `off` and `minimal` mapped to `null` — Pi hides both levels in
+  the UI and the SDK omits `reasoning_effort` entirely for no-level calls
+  (upstream default, no 400). Identical bug class to pi-commandcode 0.1.4;
+  same upstream, same error text. Scoped to command-code prefixes only —
+  other upstreams (glm-cn, openai, etc.) keep `off:"none"`, which is
+  OmniRoute's canonical disable vocabulary that other executors translate.
+
 ## 1.1.2 — 2026-08-26
 
 ### Fixed

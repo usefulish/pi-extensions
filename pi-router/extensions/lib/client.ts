@@ -165,6 +165,11 @@ function lookupContextOverride(modelId: string): { contextWindow?: number; maxTo
   return {};
 }
 
+// Upstream connection slugs (OmniRoute ids are "<connection>/<model>") whose
+// reasoning_effort schema rejects "none" and "minimal". The `cmd` slug is an alias
+// pi-sub memory maps to the same upstream.
+const NO_DISABLE_PREFIX = /^(command-?code|cmd)[-/]/i;
+
 const FORMAT_TO_LEVEL_MAP: Record<string, Record<string, string | null>> = {
   "openai":      { off:"none", minimal:"minimal", low:"low", medium:"medium", high:"high", xhigh:"xhigh", max:"xhigh" },
   "openai-max":  { off:"none", minimal:"minimal", low:"low", medium:"medium", high:"high", xhigh:"xhigh", max:"max" },
@@ -188,7 +193,15 @@ const FORMAT_TO_LEVEL_MAP: Record<string, Record<string, string | null>> = {
 
 function getThinkingLevelMap(modelId: string): Record<string, string | null> {
   const fmt = detectThinkingFormat(modelId);
-  return FORMAT_TO_LEVEL_MAP[fmt] ?? FORMAT_TO_LEVEL_MAP["openai"];
+  const map = FORMAT_TO_LEVEL_MAP[fmt] ?? FORMAT_TO_LEVEL_MAP["openai"];
+  // Upstream connections whose reasoning_effort accepts only low|medium|high|xhigh|max
+  // (Command Code) — "none"/"minimal" would be forwarded untranslated and rejected
+  // with HTTP 400 (same bug class as pi-commandcode 0.1.4). null hides both levels
+  // in the Pi UI; the SDK omits reasoning_effort entirely when offValue is not a
+  // string (openai-completions buildParams no-level branch), so background calls
+  // (/tree branch summary, /handoff, off-level compaction) stop sending an invalid
+  // value. Mirrors 9router FORMAT_LEVELS otherwise — only these prefixes are scoped.
+  return NO_DISABLE_PREFIX.test(modelId) ? { ...map, off: null, minimal: null } : map;
 }
 
 export function mapModel(raw: RouterModelRaw, enableReasoning: boolean): PiModel {

@@ -459,6 +459,52 @@ describe("client", () => {
   });
 });
 
+// ── no-disable prefix (command-code upstream bug class) ──────────────────────
+
+describe("client thinkingLevelMap no-disable prefix override", () => {
+  it("command-code/ minimax model: off and minimal are nulled, low/medium/high/xhigh retained", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "command-code/MiniMaxAI/MiniMax-M3" }, true);
+    assert.equal(m.thinkingLevelMap?.off, null);
+    assert.equal(m.thinkingLevelMap?.minimal, null);
+    // Format-detection (contains "minimax") keeps the rest of the minimax map intact
+    // so interactive "low"/"medium"/"high"/"xhigh" still send valid values.
+    assert.equal(m.thinkingLevelMap?.low, "low");
+    assert.equal(m.thinkingLevelMap?.medium, "medium");
+    assert.equal(m.thinkingLevelMap?.high, "high");
+    assert.equal(m.thinkingLevelMap?.xhigh, "xhigh");
+  });
+
+  it("glm-cn/ zai model: off stays \"none\" (not a command-code route — untouched)", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "glm-cn/glm-5.3" }, true);
+    // zai format: off="none" by design (GLM upstream accepts none via its executor).
+    assert.equal(m.thinkingLevelMap?.off, "none");
+  });
+
+  it("cmd/ alias prefix also nulls off/minimal", async () => {
+    const { mapModel } = await import("../lib/client.js");
+    const m = mapModel({ id: "cmd/MiniMaxAI/MiniMax-M3" }, true);
+    assert.equal(m.thinkingLevelMap?.off, null);
+    assert.equal(m.thinkingLevelMap?.minimal, null);
+  });
+
+  it("applyReasoning re-derives nulls on a stored command-code model (restart path)", async () => {
+    const { mapModel, applyReasoning } = await import("../lib/client.js");
+    // Simulate a stored model from models-store.json that was mapped before the fix
+    // (off:"none"). applyReasoning re-runs getThinkingLevelMap from the id, so after
+    // the fix a Pi restart re-applies the override without a network refresh.
+    const stale = mapModel({ id: "command-code/MiniMaxAI/MiniMax-M3" }, false);
+    // sanity: before-fix maps would have off:"none" — but with the fix in place we
+    // already null it; the meaningful assertion is that re-derivation produces the
+    // same nulls as the network path.
+    const remapped = applyReasoning(stale, true);
+    assert.equal(remapped.thinkingLevelMap?.off, null);
+    assert.equal(remapped.thinkingLevelMap?.minimal, null);
+    assert.equal(remapped.thinkingLevelMap?.low, "low");
+  });
+});
+
 // ── provider registration shape ──────────────────────────────────────────────
 
 describe("provider", () => {
