@@ -44,7 +44,7 @@ export default function piAdvisor(pi: ExtensionAPI): void {
     return box;
   });
 
-  // Message renderer for sendMessage asides (LLM-visible next turn). Guard for
+  // Message renderer for next-turn asides (LLM-visible deferred notes). Guard for
   // older Pi builds/tests that only mock registerEntryRenderer.
   if (typeof (pi as unknown as { registerMessageRenderer?: unknown }).registerMessageRenderer === "function") {
     (pi as unknown as { registerMessageRenderer: typeof pi.registerEntryRenderer }).registerMessageRenderer<NoteData>(REVIEW_ENTRY, (message, { expanded }, theme) => {
@@ -108,7 +108,6 @@ export default function piAdvisor(pi: ExtensionAPI): void {
   pi.on("agent_settled", async (_event, ctx) => {
     if (!runtime || !watchEnabled || runtime.stats.paused) return;
     await reviewTurn(runtime, ctx, {
-      appendEntry: (customType, data) => pi.appendEntry(customType, data),
       sendMessage: (message, options) => pi.sendMessage(message, options as never),
       sendUserMessage: (content, options) => pi.sendUserMessage(content, options),
     }, testIsolated);

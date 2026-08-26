@@ -52,14 +52,17 @@ describe("advisor compliance", () => {
 
   beforeEach(() => { reply = ""; });
 
-  it("nit is in LLM context on the next turn (not a display-only card)", async () => {
+  it("nit is in LLM context on the next turn (via sendUserMessage, not display-only card)", async () => {
     reply = '{"severity":"nit","note":"unused import in foo.ts"}';
     const rt = (await import("../lib/watcher")).createRuntime(cfg, cfg.model);
     const base = toolCalls(4);
     const capture: any[] = [];
     await reviewTurn(rt, ctxFor(base), hostFor(capture), fake as any);
-    assert.ok(capture.some((c: any) => c.kind === "custom_message"), "nit delivered as custom_message aside");
+    // At agent_settled the turn is idle — no next step boundary exists, so an
+    // accepted note (any severity) must steer a turn to be acted on at all.
+    assert.ok(capture.some((c: any) => c.kind === "user"), "nit delivered via sendUserMessage (steers a turn)");
     assert.ok(!capture.some((c: any) => c.kind === "appendEntry"), "no display-only appendEntry");
+    assert.ok(!capture.some((c: any) => c.kind === "custom_message"), "no non-interrupting aside at settle");
     assert.ok(contextHasNote(capture, "unused import in foo.ts", base), "nit visible to LLM on next turn");
   });
 
@@ -73,7 +76,7 @@ describe("advisor compliance", () => {
     assert.ok(contextHasNote(capture, "edit went to the wrong file", base));
   });
 
-  it("second distinct concern steers again (no silent downgrade)", async () => {
+  it("second distinct concern inside cooldown is deferred to a next-turn aside", async () => {
     const rt = (await import("../lib/watcher")).createRuntime(cfg, cfg.model);
     let base = toolCalls(4);
     reply = '{"severity":"concern","note":"first concern"}';
@@ -83,8 +86,11 @@ describe("advisor compliance", () => {
     reply = '{"severity":"concern","note":"second concern"}';
     const capture: any[] = [];
     await reviewTurn(rt, ctxFor(base2), hostFor(capture), fake as any);
-    assert.ok(capture.some((c: any) => c.kind === "user"), "second concern steers via user message");
-    assert.ok(!capture.some((c: any) => c.kind === "custom_message"), "no silent aside downgrade");
+    // Still inside the immuneTurns cooldown (immuneTurns=3) → deferred aside,
+    // LLM-visible next turn, not a wake. Mirrors OMP's post-interrupt cooldown.
+    assert.ok(!capture.some((c: any) => c.kind === "user"), "second concern deferred while on cooldown");
+    assert.ok(capture.some((c: any) => c.kind === "custom_message"), "deferred as LLM-visible next-turn aside");
+    assert.ok(contextHasNote(capture, "second concern", base2), "deferred note visible to LLM on next turn");
     assert.ok(contextHasNote(capture, "second concern", base2));
   });
 

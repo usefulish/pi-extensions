@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { describe, it, beforeEach } from "mocha";
-import { createRuntime, reviewTurn, type WatcherHost, type IsolatedCall } from "../lib/watcher";
+import { createRuntime, reviewTurn, SYSTEM, type WatcherHost, type IsolatedCall } from "../lib/watcher";
 import type { AdvisorConfig } from "../lib/config";
 
 // Injectable fake isolated-model call — tests never hit a provider.
@@ -20,7 +20,7 @@ function makeHost(): any {
     asides: [] as any[],
     userMessages: [] as any[],
     appendEntry: (customType: string, data: any) => h.cards.push({ customType, data }),
-    sendMessage: (message: { customType: string; content: string; display: boolean; details?: unknown }) => h.asides.push(message),
+    sendMessage: (message: { customType: string; content: string; display: boolean; details?: unknown }, options?: any) => h.asides.push({ message, options }),
     sendUserMessage: (content: string, options?: any) => h.userMessages.push({ content, options }),
   };
   return h;
@@ -88,27 +88,34 @@ describe("reviewTurn", () => {
     assert.equal(rt.stats.reviews, 1);
   });
 
-  it("second distinct concern steers again; stats counted once per note", async () => {
+  it("second distinct concern within cooldown is deferred to a next-turn aside", async () => {
     reply = '{"severity":"concern","note":"first concern about imports"}';
     const { rt, e } = setup(5);
     await reviewTurn(rt, ctx(e), asHost(host), fake);
+    assert.equal(host.userMessages.length, 1, "first concern steers");
+    assert.equal(rt.steerCooldownTurns, 3, "steer arms the cooldown");
+    // second distinct concern arrives inside the cooldown window → deferred aside
     reply = '{"severity":"concern","note":"second distinct concern about tests"}';
     await reviewTurn(rt, ctx([...e, ...entries(4, 2)]), asHost(host), fake);
-    assert.equal(host.userMessages.length, 2, "both concerns steer");
-    assert.equal(host.asides.length, 0, "no silent aside downgrade");
-    assert.equal(host.cards.length, 0);
-    assert.equal(rt.stats.concerns, 2, "counted once per delivered note");
-    assert.equal(rt.stats.nits, 0);
+    assert.equal(host.userMessages.length, 1, "no second steer while on cooldown");
+    assert.equal(host.asides.length, 1, "deferred as LLM-visible next-turn aside");
+    assert.equal(host.asides[0].options?.deliverAs, "nextTurn");
+    assert.ok(host.asides[0].message.content.includes("tests"));
+    assert.equal(rt.stats.concerns, 2, "still counted once per accepted note");
   });
 
-  it("nit card goes to appendEntry (not LLM-visible sendMessage)", async () => {
+  it("nit steers via sendUserMessage followUp (accepted notes all wake the idle agent)", async () => {
     reply = '{"severity":"nit","note":"unused import in foo.ts"}';
     const { rt, e } = setup(5);
     await reviewTurn(rt, ctx(e), asHost(host), fake);
-    assert.equal(host.cards.length, 0, "nits now go to sendMessage asides, not appendEntry cards");
-    assert.equal(host.asides.length, 1);
-    assert.equal(host.asides[0].customType, "pi-advisor");
-    assert.ok(host.asides[0].content.includes("unused import in foo.ts"));
+    // agent_settled is idle — there is no next step boundary, so a nit that
+    // doesn't wake the agent is never acted on. All accepted notes steer.
+    assert.equal(host.cards.length, 0);
+    assert.equal(host.asides.length, 0, "nits no longer go to a non-interrupting aside at settle");
+    assert.equal(host.userMessages.length, 1);
+    assert.equal(host.userMessages[0].options?.deliverAs, "followUp");
+    assert.ok(host.userMessages[0].content.includes("unused import in foo.ts"));
+    assert.equal(rt.stats.nits, 1);
   });
 
   it("concern steers via sendUserMessage followUp", async () => {
@@ -121,18 +128,27 @@ describe("reviewTurn", () => {
     assert.equal(rt.stats.concerns, 1);
   });
 
-  it("concern steers again on a second distinct concern (no silent downgrade)", async () => {
+  it("concern after cooldown expires steers again", async () => {
     reply = '{"severity":"concern","note":"first concern about imports"}';
     const { rt, e } = setup(5);
     await reviewTurn(rt, ctx(e), asHost(host), fake);
     assert.equal(host.userMessages.length, 1);
-    // distinct note — must steer again, not sit as an aside
+    assert.equal(rt.steerCooldownTurns, 3, "steer arms the cooldown (immuneTurns)");
+    // Distinct note, but inside the cooldown window → deferred aside
     reply = '{"severity":"concern","note":"second distinct concern about tests"}';
     await reviewTurn(rt, ctx([...e, ...entries(4, 2)]), asHost(host), fake);
-    assert.equal(host.userMessages.length, 2, "second concern steers too");
-    assert.equal(host.asides.length, 0, "no silent downgrade to aside");
-    assert.equal(host.cards.length, 0);
+    assert.equal(host.userMessages.length, 1, "second concern deferred while on cooldown");
+    assert.equal(host.asides.length, 1, "deferred as next-turn aside");
     assert.equal(rt.stats.concerns, 2);
+    assert.equal(rt.steerCooldownTurns, 2, "cooldown ticks once per settled turn (deferral does not double-tick)");
+    // Two more settled turns tick the cooldown 2→1→0 → the next concern steers.
+    reply = '{"severity":"concern","note":"third distinct concern after cooldown"}';
+    await reviewTurn(rt, ctx([...e, ...entries(4, 2), ...entries(4, 3)]), asHost(host), fake);
+    assert.equal(host.userMessages.length, 1, "still deferred (cooldown 1 > 0)");
+    reply = '{"severity":"concern","note":"fourth distinct concern after cooldown"}';
+    await reviewTurn(rt, ctx([...e, ...entries(4, 2), ...entries(4, 3), ...entries(4, 4)]), asHost(host), fake);
+    assert.equal(host.userMessages.length, 2, "concern steers again after cooldown expired");
+    assert.equal(rt.steerCooldownTurns, 3, "steer re-arms cooldown");
   });
 
   it("blocker steers via followUp", async () => {
@@ -152,7 +168,7 @@ describe("reviewTurn", () => {
     const { rt, e } = setup(5);
     await reviewTurn(rt, ctx(e), asHost(host), fake);
     await reviewTurn(rt, ctx([...e, ...entries(4, 2)]), asHost(host), fake);
-    assert.equal(host.asides.length, 1, "identical note not repeated");
+    assert.equal(host.userMessages.length, 1, "identical note not repeated");
     assert.equal(rt.guard.counts.suppressed, 1);
   });
 
@@ -224,5 +240,18 @@ describe("cursor semantics", () => {
     const third = [...second, ...entries(5, 3)]; // 5 new tool calls
     await reviewTurn(rt, ctx(third), asHost(host), fake);
     assert.equal(calls, 2);
+  });
+
+  it("reviewer SYSTEM prompt matches delivery: every accepted note reaches the agent, nobody is card-only", () => {
+    // Regression: a prompt claiming some severity is "surfaced as a card / does
+    // not interrupt" would mis-calibrate the reviewer LLM against reviewTurn's
+    // delivery (steer, or deferred LLM-visible next-turn aside during cooldown).
+    // Pin the invariant: every accepted note is delivered and the agent responds.
+    assert.ok(SYSTEM.includes("Every accepted note is delivered to the primary agent and it will respond"),
+      "prompt must state every accepted note reaches the agent and it responds");
+    assert.ok(/steering/.test(SYSTEM) && /deferred to the next turn as a visible note/.test(SYSTEM),
+      "prompt must describe both steer and cooldown-deferred delivery");
+    assert.ok(!/surfaced as a card|does not interrupt/.test(SYSTEM),
+      "prompt must not claim any severity is non-interrupting / card-only");
   });
 });

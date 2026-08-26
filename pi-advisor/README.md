@@ -6,12 +6,18 @@ consult tool. Inspired by the advisor subsystem in
 
 - **Automatic turn-end review**: after each settled turn with real work, an
   isolated reviewer model examines the transcript and may emit **one** note:
-  - `nit` — minor issue → visible Advisor card, the agent is not interrupted
-  - `concern` — material risk → the note steers the agent as a follow-up
-  - `blocker` — continuing would waste work → steers like a concern
-  - Repeated distinct concerns also steer (no silent downgrade); loop
-    protection comes from the emission guard (same note not re-delivered
-    within the `immuneTurns` review window).
+  - `nit` — minor issue
+  - `concern` — material risk
+  - `blocker` — continuing would waste work
+  - Every accepted note is delivered to the agent: as a follow-up turn
+    (steering) when off-cooldown, or as a visible note deferred to the next
+    turn during the post-steer calm-down window. The severity sets the note's
+    authority wording (“nit — consider” vs “concern — address this” vs
+    “blocker — fix before continuing”).
+  - Post-steer cooldown: after a note steers, non-blocker notes within the
+    next `immuneTurns` settled turns are deferred (LLM-visible next turn)
+    instead of waking the agent again — bounds ping-pong. Blockers always
+    steer immediately.
 - **Emission guard** (noise control): content-free phrases ("lgtm", "done", …)
   are dropped, identical notes are deduped (severity escalation still passes),
   and at most one note is delivered per review cycle.

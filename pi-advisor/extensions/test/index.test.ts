@@ -94,7 +94,7 @@ describe("index wiring", () => {
     assert.ok(state.eventHandlers.has("agent_settled"), "agent_settled hook registered");
   });
 
-  it("nit review flows through sendMessage aside (batched into LLM at next step)", async () => {
+  it("nit flow steers via sendUserMessage (accepted notes all trigger a turn at settle)", async () => {
     const { pi, state } = createFakePi();
     piAdvisor(pi);
     await mkdir(path.join(TMP, ".pi", "agent"), { recursive: true });
@@ -106,9 +106,9 @@ describe("index wiring", () => {
     await fire(pi, state, "session_start", fakeCtx([]));
     await fire(pi, state, "agent_settled", fakeCtx(toolCalls(4)));
     assert.ok(isolatedCalled, "review executed");
-    assert.equal(state.sendMessageCalls, 1, "nit goes through sendMessage (LLM-visible aside)");
+    assert.equal(state.sendMessageCalls, 0, "nit no longer goes through a non-interrupting sendMessage aside at settle");
     assert.equal(state.entries.length, 0, "nit is NOT a display-only appendEntry card");
-    assert.equal(state.userMessages.length, 0, "nit does not trigger a turn");
+    assert.equal(state.userMessages.length, 1, "nit triggers a follow-up turn (agent_settled is idle, no step boundary)");
   });
 
   it("concern steers via sendUserMessage and arms cooldown", async () => {
