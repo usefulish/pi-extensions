@@ -26,8 +26,8 @@ Each package lives in its own directory and can be installed independently. This
 | [`@bacnh85/pi-notify`](./pi-notify) | 0.1.1 | Desktop notifications and sounds — fires on task completion, errors, and questions; cross-platform (macOS/Linux/Windows + terminal OSC). |
 | [`@bacnh85/pi-obsidian`](./pi-obsidian) | 0.8.13 | Obsidian vault integration for Pi. |
 | [`@bacnh85/pi-permission`](./pi-permission) | 0.1.2 | Granular permission system — config-driven allow/ask/deny rules per tool with wildcard patterns, external-directory boundary, and a doom-loop guard. |
-| [`@bacnh85/pi-plan`](./pi-plan) | 0.11.0 | Plan mode with read-only gating and plan → implement → verify → review workflow; fallback model chain on overload. |
-| [`@bacnh85/pi-advisor`](./pi-advisor) | 0.1.0 | OMP-style automatic advisor — second model reviews each settled turn, injects severity-routed notes (nit card / concern steer with immune cooldown + emission guard); on-demand advisor consult. |
+| [`@bacnh85/pi-plan`](./pi-plan) | 0.11.1 | Plan mode with read-only gating and plan → implement → verify → review workflow; fallback model chain on overload. |
+| [`@bacnh85/pi-advisor`](./pi-advisor) | 0.1.1 | OMP-style automatic advisor — second model reviews each settled turn, injects severity-routed notes (nit card / concern steer with immune cooldown + emission guard); on-demand advisor consult. |
 | [`@bacnh85/pi-ponytail`](./pi-ponytail) | 0.1.10 | Lazy senior dev mode — YAGNI/stdlib-first coding discipline. Fork of [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail). |
 | [`@bacnh85/pi-references`](./pi-references) | 0.1.1 | External context roots — alias sibling dirs or git repos as `@docs`/`@sdk`; auto-clones repos and injects descriptions into agent context. |
 | [`@bacnh85/pi-review`](./pi-review) | 0.2.8 | Isolated read-only code review with corrected same-session fallback. |

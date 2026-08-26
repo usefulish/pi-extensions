@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.1 (2026-08-26)
+
+### Fixes
+
+- Model picker now matches Pi 0.84.3's `ModelSelectorComponent` constructor
+  (the `settings` param was removed; default-model persistence is now via
+  Ctrl+S and stays disabled here). Fixes a typecheck failure against
+  `@earendil-works/pi-coding-agent@0.84.3`.
+- Peer dependency range narrowed to `>=0.84.3 <0.85.0` (the adapted constructor call
+  is only valid against the 0.84.3 SDK signature).
+- DevDeps bumped to pi SDK/pi-tui 0.84.3 for CI parity.
+
 ## 0.11.0 (2026-08-25)
 
 ### Removed

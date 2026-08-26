@@ -28,8 +28,8 @@ export function modelSearchText(model: Model): string {
 
 /**
  * Adapt Pi's primary model selector into a pure picker that returns a
- * `provider/id` ref (or undefined when cancelled). Never saves Pi's primary
- * model — the no-op `setDefaultModelAndProvider` keeps it inert.
+ * `provider/id` ref (or undefined when cancelled). Never persists Pi's
+ * primary model: onSelectAsDefault is not passed, so Ctrl+S stays inert.
  */
 export async function chooseModel(ctx: ExtensionContext, currentRef?: string, hint?: string): Promise<string | undefined> {
   if (ctx.mode !== "tui") return undefined;
@@ -44,9 +44,8 @@ export async function chooseModel(ctx: ExtensionContext, currentRef?: string, hi
     getModel: (provider: string, id: string) => ctx.modelRegistry.find(provider, id),
     getError: () => ctx.modelRegistry.getError(),
   };
-  const settings = { setDefaultModelAndProvider: () => {} };
   return ctx.ui.custom((tui, _theme, _keybindings, done) => new ModelSelectorComponent(
-    tui, current, settings as any, runtime as any, [],
+    tui, current, runtime as any, [],
     (model) => done(modelRef(model)), () => done(undefined), hint,
   ));
 }

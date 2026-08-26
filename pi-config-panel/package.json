@@ -48,7 +48,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-tui": "^0.84.1",
+    "@earendil-works/pi-tui": "^0.84.3",
     "@types/chai": "^4.3.20",
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.19.43",
