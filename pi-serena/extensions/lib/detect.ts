@@ -3,8 +3,6 @@
  * Extracted from index.ts so it can be tested without importing pi-coding-agent.
  */
 
-export const SEMANTIC_MISS_THRESHOLD = 2;
-
 export const CODE_FILE_EXTENSIONS = new Set([
   ".c",
   ".cc",
@@ -69,5 +67,7 @@ export function commandLooksLikeSemanticCodeSearch(command: string): boolean {
   if (/\b(symbol|class|method|function|def|interface|references?|implementation|declaration|rename|refactor)\b/i.test(command)) return true;
   // ponytail: built from CODE_FILE_EXTENSIONS so the two lists stay in sync
   const codeExtPattern = [...CODE_FILE_EXTENSIONS].map(e => e.slice(1)).join("|");
-  return new RegExp(`\\.(${codeExtPattern})\\b`, "i").test(command);
+  // Strip glob flags (--include/--exclude, ripgrep -g/--glob) so tool flags don't count as searched code files.
+  const stripped = command.replace(/--(?:include|exclude|glob)[= ]\S+|(?:^|\s)-g[= ]\S+/gi, " ");
+  return new RegExp(`\\.(${codeExtPattern})\\b`, "i").test(stripped);
 }

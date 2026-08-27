@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.13 (2026-08-27)
+
+### Changes
+
+- Removed the `[serena-reminder]` semantic-miss steering. The reminder fired on
+  2 heuristic "misses" (raw code read or semantic code search while Serena tools
+  were active) and interrupted the agent with a steer message that spawned a
+  new turn — noisy for capable models (GLM/router glm-cn) and over-firing on
+  non-semantic greps (`--include="*.ts"` glob flags counted as searched code
+  files).
+- Kept: `SERENA_FIRST_GUIDANCE` system-prompt injection (every session, zero
+  interruptions) and opt-in `PI_SERENA_STRICT=1` / `PI_SERENA_STRICT_MISSES=1`
+  in-band blocking — strict mode remains the enforcement path.
+- Removed env knob: `PI_SERENA_REMIND_ON_FIRST_MISS` (and the unused
+  `PI_SERENA_SKIP_SEMANTIC_MISS_MODELS` model skip-list).
+- Fixed the detector false positive: `--include=`/`--exclude=` glob flags are
+  stripped before the code-extension test, so `grep -rn x --include="*.ts"
+docs/` is no longer flagged as a semantic code search.
+
 ## 0.9.12 (2026-08-06)
 
 ### Fixes

@@ -8,7 +8,6 @@ import {
   pathLooksNonSemantic,
   commandLooksLikeSemanticCodeSearch,
 } from "./lib/detect";
-import { SEMANTIC_MISS_THRESHOLD } from "./lib/detect";
 import { SERENA_FIRST_GUIDANCE, SERENA_MISS_GUIDANCE, shouldBlockSemanticMiss } from "./lib/guidance";
 import { normalizeTimeoutMs, stripControlParams } from "./lib/normalize";
 import { repairSymbolNameKey } from "./lib/symbol-key";
@@ -32,12 +31,10 @@ describe("Serena tool-selection guidance", () => {
     expect(shouldBlockSemanticMiss("read", { path: "package.json" })).to.be.false;
     expect(shouldBlockSemanticMiss("bash", { command: "rg 'install' README.md" })).to.be.false;
   });
-});
 
-describe("SEMANTIC_MISS_THRESHOLD", () => {
-  it("is 2, not the old threshold of 4", () => {
-    // Changed from 4 to 2 so the agent gets a reminder sooner
-    expect(SEMANTIC_MISS_THRESHOLD).to.equal(2);
+  it("does not count --include/--exclude glob flags as searched code files", () => {
+    expect(commandLooksLikeSemanticCodeSearch('grep -rn "todo" --include="*.md" --include="*.ts" docs/')).to.be.false;
+    expect(commandLooksLikeSemanticCodeSearch("rg -g '*.ts' 'todo' docs/")).to.be.false;
   });
 });
 

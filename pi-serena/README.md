@@ -55,7 +55,6 @@ Use `read`, `grep`, and `find` for docs, configs, non-code files, exact text che
 
 Optional prompt/tool-selection knobs:
 
-- `PI_SERENA_REMIND_ON_FIRST_MISS=1` — send the Serena reminder after the first obvious code-read/search miss instead of the default threshold.
 - `PI_SERENA_STRICT=1` or `PI_SERENA_STRICT_MISSES=1` — block obvious raw code reads or semantic code searches until Serena is used first. Docs/config/non-code reads are still allowed.
 - `SERENA_EAGER_STARTUP=1` — pre-spawn the worker on session start.
 - `SERENA_LANGUAGE_BACKEND` — select Serena's code-intelligence backend at worker startup: `LSP` (default) or `JetBrains`. When set to `JetBrains`, install the Serena JetBrains Plugin and open the project in your JetBrains IDE, then restart the worker (`/serena-restart`). The backend is fixed for the session and cannot be changed without a restart. Per-project overrides in `<project>/.serena/project.yml` (`language_backend: JetBrains`) are honored by Serena automatically and take precedence at project activation.

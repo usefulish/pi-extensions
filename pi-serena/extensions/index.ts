@@ -9,18 +9,10 @@ import { repairSymbolNameKey } from "./lib/symbol-key";
 
 const DEFAULT_CONTEXT = "ide";
 
-/** Set of "provider/modelId" strings that should skip semantic-miss detection (e.g., deepseek-tools handles it). */
-const SKIP_SEMANTIC_MISS_MODELS = new Set(
-  (process.env.PI_SERENA_SKIP_SEMANTIC_MISS_MODELS || "opencode-go/deepseek-v4,opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro")
-    .split(",")
-    .map((s) => s.trim()),
-);
-
 const PROJECT_PARAM = Type.Optional(Type.String({ description: "Project path or registered Serena project name. Default: CWD." }));
 const CONTEXT_PARAM = Type.Optional(Type.String({ description: "Serena context name. Default: ide. Available: agent, chatgpt, claude-code, codex, copilot-cli, desktop-app, ide, jb-ai-assistant, junie, oaicompat-agent, vscode." }));
 const MAX_CHARS_PARAM = Type.Optional(Type.Number({ description: "Max response chars. Default: Serena config." }));
 const TIMEOUT_MS_PARAM = Type.Optional(Type.Number({ description: "Timeout in ms. Default: 120000." }));
-const SEMANTIC_MISS_THRESHOLD = 2;
 
 const OUTPUT_MAX_BYTES = 50 * 1024;
 const OUTPUT_MAX_LINES = 2_000;
@@ -184,9 +176,6 @@ function resultText(response: SerenaWorkerResponse): string {
 let worker: SerenaWorkerClient | undefined;
 
 export default function serenaToolsExtension(pi: ExtensionAPI) {
-  let semanticMissCount = 0;
-  let lastReminderTs = 0;
-
   const getWorker = (ctx?: { ui?: { setStatus?: (key: string, value: string | undefined) => void } }) => {
     if (!worker) worker = new SerenaWorkerClient((status) => ctx?.ui?.setStatus?.("serena", status ? "serena ✓" : undefined));
     return worker;
@@ -585,46 +574,21 @@ export default function serenaToolsExtension(pi: ExtensionAPI) {
     };
   });
 
-  pi.on("tool_call", async (event, ctx) => {
+  pi.on("tool_call", async (event) => {
     // Skip semantic miss detection if serena tools are not active (e.g., plan mode)
     const activeTools = pi.getActiveTools();
     if (!activeTools.includes("serena_find_symbol")) return;
 
-    // Models whose built-in tool-handling already manages semantic misses — skip to avoid duplicate steer
-    const modelKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "";
-    if (modelKey && SKIP_SEMANTIC_MISS_MODELS.has(modelKey)) return;
-
-    if (event.toolName.startsWith("serena_")) {
-      semanticMissCount = 0;
-      return;
-    }
-
-    const looksLikeSemanticMiss = shouldBlockSemanticMiss(event.toolName, event.input as Record<string, unknown>);
-    if (!looksLikeSemanticMiss) return;
+    // Strict mode blocks obvious raw code reads/searches in-band; no reminder steering.
     const strict = process.env.PI_SERENA_STRICT === "1" || process.env.PI_SERENA_STRICT_MISSES === "1";
-    if (strict) {
+    if (!strict) return;
+    if (shouldBlockSemanticMiss(event.toolName, event.input as Record<string, unknown>)) {
       return { block: true, reason: `Serena-first mode: ${SERENA_MISS_GUIDANCE}` };
-    }
-    semanticMissCount += 1;
-    if ((semanticMissCount >= SEMANTIC_MISS_THRESHOLD || process.env.PI_SERENA_REMIND_ON_FIRST_MISS === "1") && Date.now() - lastReminderTs > 30_000) {
-      semanticMissCount = 0;
-      lastReminderTs = Date.now();
-      pi.sendMessage(
-        {
-          customType: "serena-reminder",
-          content: `Reminder: ${SERENA_MISS_GUIDANCE}`,
-          display: true,
-        },
-        { deliverAs: "steer", triggerTurn: true },
-      );
     }
   });
 
   // Eager startup: pre-spawn the worker on session start when SERENA_EAGER_STARTUP=1
   pi.on("session_start", async (_event, ctx) => {
-    // Reset semantic miss counters on new session
-    semanticMissCount = 0;
-    lastReminderTs = 0;
     if (process.env.SERENA_EAGER_STARTUP === "1") {
       // Spawn the worker via a lightweight status request to warm the Python bridge
       getWorker(ctx).request({ action: "status", project: process.cwd(), context: DEFAULT_CONTEXT }, 30_000).catch(() => {
