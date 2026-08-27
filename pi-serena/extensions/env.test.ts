@@ -22,11 +22,16 @@ function withTempDir(fn: (dir: string) => void): void {
   fs.mkdirSync(globalDir);
   const prev = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = globalDir;
+  // A real SERENA_LANGUAGE_BACKEND in the ambient shell would leak into
+  // loadDotenvValues (process.env wins) and fail every assertion.
+  const prevSerena = process.env.SERENA_LANGUAGE_BACKEND;
+  delete process.env.SERENA_LANGUAGE_BACKEND;
   try {
     fn(dir);
   } finally {
     if (prev === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prev;
+    if (prevSerena !== undefined) process.env.SERENA_LANGUAGE_BACKEND = prevSerena;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }

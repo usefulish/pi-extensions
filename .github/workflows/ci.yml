@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per ref: duplicate triggers (e.g. two push events for the same commit)
+# cancel the obsolete run instead of racing the npm view → npm publish check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Detect which packages have changed, build a dynamic matrix
   changes:
