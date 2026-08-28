@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Regenerate catalog: pi-hub's own entry pointed at the pre-rename unscoped name (`pi-hub` → `@bacnh85/pi-hub`), which would have resolved `pi-hub add pi-hub` to a nonexistent npm package.
+
 ## 0.1.1
 
 - Fix picker redraw: first item line was indented after arrow-key navigation (`moveCursor(0, -N)` keeps the column; now emits `\r` first) and the frame drifted up one row per redraw (hint line has no trailing `\n`; up-move is now `items.length + 1`).

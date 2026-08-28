@@ -50,7 +50,7 @@
     "description": "Pi extension: FFF-powered fuzzy file and content search."
   },
   {
-    "name": "pi-hub",
+    "name": "@bacnh85/pi-hub",
     "dir": "pi-hub",
     "description": "Interactive installer for Pi coding agent packages — browse, search, and install pi extensions via npx pi-hub"
   },
