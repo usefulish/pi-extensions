@@ -94,8 +94,10 @@ function picker(title, items, renderDetail) {
     let cursor = 0;
     const checked = new Set();
     const render = () => {
-      process.stdout.write("\x1b[?25l"); // hide cursor
-      try { process.stdout.moveCursor(0, -(items.length + 2)); } catch {} // ponytail: first frame has no rows to go up over
+      // \r first: moveCursor(0, -N) keeps the column, and the hint line (no trailing \n)
+      // leaves the cursor at its end — without \r the first item redraws indented.
+      process.stdout.write("\x1b[?25l\r"); // hide cursor, column 0
+      try { process.stdout.moveCursor(0, -(items.length + 1)); } catch {} // ponytail: +1 because hint has no trailing \n
       for (let i = 0; i < items.length; i++) {
         const marker = checked.has(i) ? paint.green("◉") : "○";
         const arrow = i === cursor ? paint.cyan("❯ ") : "  ";
@@ -139,15 +141,13 @@ function picker(title, items, renderDetail) {
       render();
     };
     process.stdout.write(`${paint.bold(title)}\n`);
-    items.slice(0, cursor).forEach(() => {}); // noop; initial frame draws below
     try { process.stdin.setRawMode(true); } catch { return resolve(null); }
     process.stdin.resume();
     process.stdin.on("data", onData);
     process.stdin.on("end", onEnd);
-    // first frame: print all lines once
-    process.stdout.write(
-      items.map(() => "").join("\n"),
-    );
+    // Reserve exactly the rows render() occupies (items + detail + hint, no
+    // trailing \n on hint), so the first moveCursor lands on the first item row.
+    process.stdout.write("\n".repeat(items.length + 1));
     render();
   });
 }

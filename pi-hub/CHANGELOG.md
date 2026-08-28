@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Fix picker redraw: first item line was indented after arrow-key navigation (`moveCursor(0, -N)` keeps the column; now emits `\r` first) and the frame drifted up one row per redraw (hint line has no trailing `\n`; up-move is now `items.length + 1`).
+
 ## 0.1.0
 
 - Published as `@bacnh85/pi-hub` (unscoped `pi-hub` rejected by npm — name too similar to `github`).
