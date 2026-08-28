@@ -110,6 +110,7 @@ function picker(title, items, renderDetail) {
     };
     const cleanup = (value) => {
       try { process.stdin.setRawMode(false); } catch {} // ponytail: best-effort restore, some stdin types can't
+      try { process.stdin.pause(); } catch {}
       process.stdin.removeListener("data", onData);
       process.stdin.removeListener("end", onEnd);
       process.stdout.write("\x1b[?25h\n");
@@ -159,7 +160,7 @@ function printList(items) {
     const tag = c.curated ? paint.green("[bacnh85]") : paint.dim("[npm]");
     const ver = c.version ? paint.dim(` v${c.version}`) : "";
     console.log(`${tag} ${paint.bold(c.name ?? c.dir)}${ver}`);
-    if (c.description) console.log(`  ${paint.dim(c.description.length > 100 ? c.description.slice(0, 97) + "..." : c.description)}`);
+    if (c.description) console.log(`  ${paint.dim(c.description)}`);
   }
   if (!items.length) console.log(paint.dim("(no matches)"));
 }
@@ -197,9 +198,25 @@ async function cmdInteractive(flags) {
     console.log(paint.red("`pi` not found on PATH. Install it first: https://github.com/earendil-works/pi"));
     return 1;
   }
-  const items = catalog.map((c) => ({ ...c, label: `${c.dir} — ${c.description.slice(0, 60)}${c.description.length > 60 ? "…" : ""}` }));
-  const chosen = await picker("pi-hub — select @bacnh85 packages to install", items, (c) =>
-    c ? `${c.name}` : "",
+  const cols = process.stdout.columns || 100;
+  const maxDirLen = Math.max(...catalog.map((c) => c.dir.length));
+  const maxDescLen = Math.max(30, cols - maxDirLen - 9); // 4 for "❯ ◉ ", maxDirLen, 2 spaces, 3 padding
+  const items = catalog.map((c) => {
+    const desc = c.description.length > maxDescLen ? `${c.description.slice(0, maxDescLen - 1)}…` : c.description;
+    return {
+      ...c,
+      label: `${c.dir.padEnd(maxDirLen)}  ${paint.dim(desc)}`,
+    };
+  });
+  const chosen = await picker(
+    "pi-hub — select @bacnh85 packages to install",
+    items,
+    (c) => {
+      if (!c) return "";
+      const full = `${c.name}: ${c.description}`;
+      const max = Math.max(40, cols - 2);
+      return full.length > max ? `${full.slice(0, max - 1)}…` : full;
+    },
   );
   if (!chosen?.length) return console.log(paint.dim("nothing selected"));
   const sources = chosen.map((c) => `npm:${c.name}`);

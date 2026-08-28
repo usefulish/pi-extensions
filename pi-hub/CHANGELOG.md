@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Fix hang after install: the picker left stdin resumed/raw, keeping the event loop alive after `main()` resolved. Now pauses stdin in cleanup and exits explicitly once pending stdout flushes.
+- Wider descriptions: picker rows use full terminal width (name column padded, description fills the rest) and the detail line shows the full npm name + description; `find` no longer caps descriptions at 100 chars.
+
 ## 0.1.2
 
 - Regenerate catalog: pi-hub's own entry pointed at the pre-rename unscoped name (`pi-hub` → `@bacnh85/pi-hub`), which would have resolved `pi-hub add pi-hub` to a nonexistent npm package.
