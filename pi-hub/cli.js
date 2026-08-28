@@ -229,12 +229,12 @@ function usage(code = 0) {
   console.log(`pi-hub — interactive installer for Pi coding agent packages
 
 Usage:
-  npx pi-hub                      browse @bacnh85 catalog, multi-select, install
-  npx pi-hub add <pkg...>         install (shorthand: pi-plan, @scope/pkg, owner/repo)
-  npx pi-hub find [query]         search curated catalog + npm keywords:pi-package
-  npx pi-hub list                 show installed packages from pi settings
-  npx pi-hub remove [pkg...]      uninstall (defaults to installed npm packages)
-  npx pi-hub update               pi update --extensions
+  npx @bacnh85/pi-hub                      browse @bacnh85 catalog, multi-select, install
+  npx @bacnh85/pi-hub add <pkg...>         install (shorthand: pi-plan, @scope/pkg, owner/repo)
+  npx @bacnh85/pi-hub find [query]         search curated catalog + npm keywords:pi-package
+  npx @bacnh85/pi-hub list                 show installed packages from pi settings
+  npx @bacnh85/pi-hub remove [pkg...]      uninstall (defaults to installed npm packages)
+  npx @bacnh85/pi-hub update               pi update --extensions
 
 Flags:
   -l, --local    project-local install (.pi/settings.json) instead of user scope

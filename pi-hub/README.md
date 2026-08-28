@@ -7,13 +7,13 @@ Inspired by [vercel-labs/skills](https://github.com/skills): one command, intera
 ## Usage
 
 ```bash
-npx pi-hub                      # browse @bacnh85 catalog, multi-select, install
-npx pi-hub add pi-plan          # install a curated package by shorthand
-npx pi-hub add owner/repo       # install from a git repo
-npx pi-hub find memory          # search curated catalog + npm keywords:pi-package
-npx pi-hub list                 # show installed packages
-npx pi-hub remove pi-plan       # uninstall
-npx pi-hub update               # pi update --extensions
+npx @bacnh85/pi-hub                      # browse @bacnh85 catalog, multi-select, install
+npx @bacnh85/pi-hub add pi-plan          # install a curated package by shorthand
+npx @bacnh85/pi-hub add owner/repo       # install from a git repo
+npx @bacnh85/pi-hub find memory          # search curated catalog + npm keywords:pi-package
+npx @bacnh85/pi-hub list                 # show installed packages
+npx @bacnh85/pi-hub remove pi-plan       # uninstall
+npx @bacnh85/pi-hub update               # pi update --extensions
 ```
 
 ### Shorthand resolution (`add`)
@@ -40,7 +40,7 @@ pi-hub is a thin discovery + selection layer **on top of the `pi` CLI** — `pi 
 - **Curated catalog** — the `@bacnh85` monorepo packages, bundled as `catalog.json`.
 - **General discovery** — npm registry search for `keywords:pi-package`, Pi's official package convention. Falls back to catalog-only when offline.
 
-`pi-hub` itself is not a pi package (nothing registers into the agent); it's a standalone zero-dependency CLI.
+`@bacnh85/pi-hub` itself is not a pi package (nothing registers into the agent); it's a standalone zero-dependency CLI.
 
 ## Requirements
 
