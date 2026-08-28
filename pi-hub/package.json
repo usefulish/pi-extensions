@@ -1,0 +1,46 @@
+{
+  "name": "pi-hub",
+  "version": "0.1.0",
+  "description": "Interactive installer for Pi coding agent packages — browse, search, and install pi extensions via npx pi-hub",
+  "license": "MIT",
+  "author": "bacnh85",
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/bacnh85/pi-extensions/tree/main/pi-hub",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bacnh85/pi-extensions.git",
+    "directory": "pi-hub"
+  },
+  "bugs": {
+    "url": "https://github.com/bacnh85/pi-extensions/issues"
+  },
+  "bin": {
+    "pi-hub": "bin/pi-hub.js"
+  },
+  "files": [
+    "bin/",
+    "cli.js",
+    "catalog.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test extensions/test/*.test.js"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "coding-agent",
+    "cli",
+    "installer",
+    "extensions",
+    "package-manager"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

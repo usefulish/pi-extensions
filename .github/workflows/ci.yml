@@ -78,6 +78,7 @@ jobs:
             pi-evolve: pi-evolve/**
             pi-a2a: pi-a2a/**
             pi-config-panel: pi-config-panel/**
+            pi-hub: pi-hub/**
 
       - name: Build matrix
         id: set-matrix
@@ -116,6 +117,7 @@ jobs:
               { pkg: 'pi-evolve', cmd: 'npm ci && npm test' },
               { pkg: 'pi-a2a', cmd: 'npm ci && npm test && npm run typecheck' },
               { pkg: 'pi-config-panel', cmd: 'npm ci && npm test && npm run typecheck' },
+              { pkg: 'pi-hub', cmd: 'node --test extensions/test/*.test.js' },
             ];
 
             const selected = '${{ github.event_name }}' === 'workflow_dispatch'

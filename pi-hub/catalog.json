@@ -1,0 +1,162 @@
+[
+  {
+    "name": "@bacnh85/pi-a2a",
+    "dir": "pi-a2a",
+    "description": "A2A Protocol v1.0 bidirectional extension for the Pi coding agent — distribute tasks to remote agents, be called by them, and self-declare for local session discovery."
+  },
+  {
+    "name": "@bacnh85/pi-advisor",
+    "dir": "pi-advisor",
+    "description": "Pi extension for an automatic advisor: a second model that reviews each settled turn and injects severity-routed notes, plus an on-demand consult tool."
+  },
+  {
+    "name": "@bacnh85/pi-agy",
+    "dir": "pi-agy",
+    "description": "Google Antigravity CLI (agy) bridge for Pi — delegate bulk scaffolding, refactors, and test generation to a leaner model."
+  },
+  {
+    "name": "@bacnh85/pi-budget",
+    "dir": "pi-budget",
+    "description": "Spend cap enforcement for Pi — halts the agent when session cost exceeds a --budget USD limit. Companion to pi-sub (which renders usage); this one enforces."
+  },
+  {
+    "name": "@bacnh85/pi-chatgpt-web",
+    "dir": "pi-chatgpt-web",
+    "description": "Pi extension that turns a self-hosted ChatGPT-web bridge (OpenAI-compatible, e.g. basketikun/chatgpt2api) into a Pi provider for free web-tier models."
+  },
+  {
+    "name": "@bacnh85/pi-checkpoint",
+    "dir": "pi-checkpoint",
+    "description": "Git-backed undo/redo for Pi — snapshots file state at each turn into a dedicated ref namespace, so /undo rolls back the last message AND its file changes. Fills PI's gap vs OpenCode's git-backed /undo /redo (PI has conversation-level /tree but not file-state snapshots)."
+  },
+  {
+    "name": "@bacnh85/pi-commandcode",
+    "dir": "pi-commandcode",
+    "description": "Pi extension that connects to Command Code's OpenAI-compatible Provider API."
+  },
+  {
+    "name": "@bacnh85/pi-config-panel",
+    "dir": "pi-config-panel",
+    "description": "Shared interactive config-panel kernel for Pi extensions — arrow-key toggle/edit overlay panels (PanelRow/PanelGroup/PanelAction row model + ConfigPanelModel TUI shell) rendered via ctx.ui.custom."
+  },
+  {
+    "name": "@bacnh85/pi-evolve",
+    "dir": "pi-evolve",
+    "description": "Pi extension that adds a trajectory-based self-learning loop — automatic capture, reflection, and contextual injection of learnings."
+  },
+  {
+    "name": "@bacnh85/pi-fff",
+    "dir": "pi-fff",
+    "description": "Pi extension: FFF-powered fuzzy file and content search."
+  },
+  {
+    "name": "pi-hub",
+    "dir": "pi-hub",
+    "description": "Interactive installer for Pi coding agent packages — browse, search, and install pi extensions via npx pi-hub"
+  },
+  {
+    "name": "@bacnh85/pi-init",
+    "dir": "pi-init",
+    "description": "Guided AGENTS.md generation for Pi — /init scans the repo (package.json, CI, dir structure) and generates/updates AGENTS.md with build/test/lint commands, architecture, and conventions. Inspired by OpenCode's /init."
+  },
+  {
+    "name": "@bacnh85/pi-kicad",
+    "dir": "pi-kicad",
+    "description": "KiCad CAD-design extension for Pi — drive schematic capture and PCB layout via the Konnect binary over a local HTTP daemon (no MCP SDK)."
+  },
+  {
+    "name": "@bacnh85/pi-model-tools",
+    "dir": "pi-model-tools",
+    "description": "Unified tool-wrapping, argument repair, reasoning management, DeepSeek V4 guidance + Super Power Mode, defensive leak-cleaning, edit mismatch repair (read-notice stripping + trim-tolerant retry), and a Codex-style apply_patch diff tool for DeepSeek V4 and GLM model families from any provider."
+  },
+  {
+    "name": "@bacnh85/pi-munin",
+    "dir": "pi-munin",
+    "description": "Pi extension that provides native Munin long-term memory tools through direct SDK integration."
+  },
+  {
+    "name": "@bacnh85/pi-notebooklm",
+    "dir": "pi-notebooklm",
+    "description": "Pi extension for Google NotebookLM — notebooks, sources, chat, research, and Studio artifacts via notebooklm-py CLI bridge."
+  },
+  {
+    "name": "@bacnh85/pi-notify",
+    "dir": "pi-notify",
+    "description": "Desktop notifications and sounds for Pi — fires on task completion, errors, and when the agent asks a question. Cross-platform (macOS notification center, Linux libnotify, Windows toast, plus OSC 777/99 terminal protocols). Inspired by OpenCode's attention feature."
+  },
+  {
+    "name": "@bacnh85/pi-obsidian",
+    "dir": "pi-obsidian",
+    "description": "Pi extension for Obsidian vault tools — read, search, create, and manage notes via the Obsidian CLI."
+  },
+  {
+    "name": "@bacnh85/pi-permission",
+    "dir": "pi-permission",
+    "description": "Granular permission system for Pi — allow/ask/deny rules per tool with wildcard patterns, external-directory boundary, and a doom-loop guard. Config-driven, opt-in companion to Pi's container-first philosophy. Inspired by OpenCode's permission config."
+  },
+  {
+    "name": "@bacnh85/pi-plan",
+    "dir": "pi-plan",
+    "description": "Plan mode with read-only gating and plan → implement → verify → review workflow for Pi."
+  },
+  {
+    "name": "@bacnh85/pi-ponytail",
+    "dir": "pi-ponytail",
+    "description": "Pi-ponytail — lazy senior dev mode for your Pi agent. Forked from DietrichGebert/ponytail."
+  },
+  {
+    "name": "@bacnh85/pi-references",
+    "dir": "pi-references",
+    "description": "External context roots for Pi — alias sibling dirs or git repos as @docs, @sdk and reference them in chat. Auto-clones git repos into a local cache; injects descriptions into agent context. Inspired by OpenCode's references feature."
+  },
+  {
+    "name": "@bacnh85/pi-review",
+    "dir": "pi-review",
+    "description": "Pi extension for isolated or local read-only code review."
+  },
+  {
+    "name": "@bacnh85/pi-router",
+    "dir": "pi-router",
+    "description": "Pi extension that connects to any OpenAI-compatible AI router (9router, omniroute, …) via its /v1 API."
+  },
+  {
+    "name": "@bacnh85/pi-rtk",
+    "dir": "pi-rtk",
+    "description": "Pi extension that routes shell commands through RTK for token savings."
+  },
+  {
+    "name": "@bacnh85/pi-serena",
+    "dir": "pi-serena",
+    "description": "Pi extension that provides Serena semantic code tools through a persistent worker."
+  },
+  {
+    "name": "@bacnh85/pi-sub",
+    "dir": "pi-sub",
+    "description": "Pi extension showing subscription usage for supported model providers."
+  },
+  {
+    "name": "@bacnh85/pi-subagent",
+    "dir": "pi-subagent",
+    "description": "In-process subagents for Pi with isolated SDK sessions, parallel and chained delegation, and inspectable threads."
+  },
+  {
+    "name": "@bacnh85/pi-themes",
+    "dir": "pi-themes",
+    "description": "Custom pi themes collection — Ayu-based dark, mirage, and light variants"
+  },
+  {
+    "name": "@bacnh85/pi-ux",
+    "dir": "pi-ux",
+    "description": "Anti-slop UI/UX design discipline for your Pi agent — anchors a lintable DESIGN.md, runs deterministic slop-audit gates (APCA contrast + tokens + states + slop tells), works with text-only models, ships reference design-system presets."
+  },
+  {
+    "name": "@bacnh85/pi-web",
+    "dir": "pi-web",
+    "description": "Pi extension for web search, page extraction, Firecrawl scraping/crawling, and Crawl4AI headless browser crawling."
+  },
+  {
+    "name": "@bacnh85/pi-windows-tools",
+    "dir": "pi-windows-tools",
+    "description": "Pi extension for Windows-native tool manipulation — shell profiles, path conversion, command execution, WSL bridge, safety policy, and developer tool discovery."
+  }
+]
