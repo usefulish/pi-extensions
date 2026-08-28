@@ -2,7 +2,7 @@
 
 Pi-native extension packages for the [Pi coding agent](https://github.com/earendil-works/pi-coding-agent), published under `@bacnh85/`.
 
-Each package lives in its own directory and can be installed independently. This repository intentionally has no root Pi package.
+Each package lives in its own directory and can be installed independently — easiest via **[pi-hub](./pi-hub)**, the interactive installer (`npx @bacnh85/pi-hub`). This repository intentionally has no root Pi package.
 
 ## Packages
 
@@ -43,38 +43,42 @@ Each package lives in its own directory and can be installed independently. This
 
 ## Install
 
-Install the published package you want:
+### Easiest: pi-hub (interactive installer)
+
+Browse the whole catalog, multi-select, and install in one command — no typing package names:
+
+```bash
+npx @bacnh85/pi-hub
+```
+
+Or install specific packages by shorthand (the full command reference lives in [pi-hub's README](./pi-hub/README.md)):
+
+```bash
+npx @bacnh85/pi-hub add pi-plan pi-serena pi-subagent   # curated shorthand
+npx @bacnh85/pi-hub find memory                          # search catalog + npm community packages
+npx @bacnh85/pi-hub list                                 # what's installed
+npx @bacnh85/pi-hub remove pi-plan                       # uninstall
+npx @bacnh85/pi-hub update                               # update all installed packages
+```
+
+### Manual: one `pi install` per package
+
+If you prefer plain `pi` (or are scripting without Node ≥ 20):
 
 ```bash
 pi install npm:@bacnh85/pi-router
 pi install npm:@bacnh85/pi-chatgpt-web
 pi install npm:@bacnh85/pi-agy
-pi install npm:@bacnh85/pi-budget
-pi install npm:@bacnh85/pi-checkpoint
-pi install npm:@bacnh85/pi-evolve
-pi install npm:@bacnh85/pi-a2a
-pi install npm:@bacnh85/pi-fff
-pi install npm:@bacnh85/pi-init
-pi install npm:@bacnh85/pi-kicad
-pi install npm:@bacnh85/pi-model-tools
-pi install npm:@bacnh85/pi-munin
-pi install npm:@bacnh85/pi-notebooklm
-pi install npm:@bacnh85/pi-notify
-pi install npm:@bacnh85/pi-obsidian
-pi install npm:@bacnh85/pi-permission
-pi install npm:@bacnh85/pi-plan
-pi install npm:@bacnh85/pi-advisor
-pi install npm:@bacnh85/pi-ponytail
-pi install npm:@bacnh85/pi-references
-pi install npm:@bacnh85/pi-review
-pi install npm:@bacnh85/pi-rtk
-pi install npm:@bacnh85/pi-serena
-pi install npm:@bacnh85/pi-sub
-pi install npm:@bacnh85/pi-subagent
-pi install npm:@bacnh85/pi-themes
-pi install npm:@bacnh85/pi-ux
-pi install npm:@bacnh85/pi-web
-pi install npm:@bacnh85/pi-windows-tools
+```
+
+…repeat per package — every row in the table above is installable as `pi install npm:@bacnh85/<package-name>`. Project-local instead of user-scope: add `-l` (writes `.pi/settings.json`, shared with your team).
+
+### Verify and manage
+
+```bash
+pi list        # installed packages
+pi config      # enable/disable extensions, skills, prompts, themes
+pi update --extensions   # update packages (or: npx @bacnh85/pi-hub update)
 ```
 
 ## Development
