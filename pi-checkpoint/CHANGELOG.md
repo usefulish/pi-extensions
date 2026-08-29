@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (2026-08-29)
+
+### Added
+
+- `/redo` argument completion mirrors `/undo` (`1|2|3` depths).
+
 ## 0.1.0
 
 - Initial release.

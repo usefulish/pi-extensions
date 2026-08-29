@@ -144,6 +144,11 @@ export default function checkpointExtension(pi) {
 
   pi.registerCommand("redo", {
     description: "Redo file changes after /undo (git-backed)",
+    getArgumentCompletions: (prefix) => {
+      const depths = ["1", "2", "3"];
+      const filtered = depths.filter((d) => d.startsWith(prefix));
+      return filtered.length > 0 ? filtered.map((d) => ({ value: d, label: d })) : null;
+    },
     handler: async (args, ctx) => {
       if (!isGitRepo(ctx?.cwd)) {
         notify(ctx, "Not a git repo — /redo disabled.", "warning");
