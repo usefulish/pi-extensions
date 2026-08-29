@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 (2026-08-29)
+
+### Added
+
+- Slash-argument autocomplete: `/a2a-send` offers configured/discovered peer
+  names (first token only), `/a2a-broadcast` offers `--agents`, and
+  `/a2a-server` offers `start|stop|status`.
+
 ## 0.7.0 — 2026-08-22
 
 ### Changed

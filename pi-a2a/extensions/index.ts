@@ -512,6 +512,17 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("a2a-send", {
     description: "Send a task to an A2A agent: /a2a-send <agent> <message>",
+    getArgumentCompletions: (prefix) => {
+      // Only the first token (peer name) is completable; the rest is free text.
+      if (/\s/.test(prefix)) return null;
+      const cfg = cfgFor(lastA2aCtx as unknown as ExtensionContext);
+      const peers = listPeers({ cfg, piDir: piDir(), mdnsPeers: server?.discoveredMdnsPeers ?? [], selfUrl: server?.url ?? "", gatewayPeers: getGatewayPeers() });
+      const q = prefix.trim().toLowerCase();
+      const items = peers
+        .filter((p) => p.name.toLowerCase().startsWith(q))
+        .map((p) => ({ value: p.name, label: p.name, description: p.url }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       const parts = String(args ?? "").trim().split(/\s+/);
       const agent = parts[0] ?? "";
@@ -527,6 +538,11 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("a2a-broadcast", {
     description: "Broadcast a task to multiple agents: /a2a-broadcast <msg> --agents a,b,c",
+    getArgumentCompletions: (prefix) => {
+      // Offer the --agents flag while it isn't present yet.
+      if (/--agents\b/.test(prefix)) return null;
+      return [{ value: "--agents", label: "--agents", description: "comma-separated peer list" }];
+    },
     handler: async (args, ctx) => {
       const raw = String(args ?? "").trim();
       const m = /--agents\s+(\S+)/.exec(raw);
@@ -763,6 +779,12 @@ export default function a2aExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("a2a-server", {
     description: "Manage the inbound A2A server: /a2a-server start|stop|status",
+    getArgumentCompletions: (prefix) => {
+      const items = ["start", "stop", "status"]
+        .filter((k) => k.startsWith(prefix.trim().toLowerCase()))
+        .map((k) => ({ value: k, label: k }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       const sub = String(args ?? "").trim().toLowerCase();
       const ectx = ctx as unknown as ExtensionContext;
@@ -856,7 +878,9 @@ export default function a2aExtension(pi: ExtensionAPI): void {
     if (server) server.refreshDescriptor();
   });
 
+  let lastA2aCtx: ExtensionContext | undefined;
   pi.on("session_start", async (_event, ctx) => {
+    lastA2aCtx = ctx;
     // Only HOST sessions serve inbound A2A. SDK-created child sessions (a2a
     // inbound tasks via makeSessionRunner, pi-subagent children) have
     // hasUI=false AND mode='print' — without this guard every child would
