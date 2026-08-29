@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1 (2026-08-29)
+
+### Added
+
+- Panel rows accept optional `completions` (inline suggestion list while
+  editing): `filterSuggestions` filters by the segment after the last comma,
+  `joinCompletion` implements segment replacement, `Tab` picks the highlighted
+  suggestion and `Enter` always submits the typed text (custom values never
+  get trapped).
+
 ## 0.1.0
 
 - Initial release — kernel extracted from pi-a2a's `/a2a-config` panel (design unchanged since a2a 0.3.0).

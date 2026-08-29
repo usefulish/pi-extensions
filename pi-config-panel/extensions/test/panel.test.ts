@@ -4,6 +4,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   applyRows,
   ConfigPanelModel,
+  filterSuggestions,
+  joinCompletion,
   kindValue,
   makeOnAction,
   row,
@@ -327,6 +329,72 @@ describe("panel kernel", () => {
     });
     it("passes strings through", () => {
       assert.equal(kindValue("string", "hello"), "hello");
+    });
+  });
+
+  describe("inline completions", () => {
+    const models = [
+      { value: "a/m1", label: "m1", description: "p" },
+      { value: "a/m2", label: "m2", description: "p" },
+      { value: "b/fast", label: "fast", description: "q" },
+    ];
+
+    it("filterSuggestions: empty suffix → full list, narrowing, no match", () => {
+      assert.deepEqual(filterSuggestions(models, ""), models);
+      assert.deepEqual(filterSuggestions(models, "m1, "), models, "comma continuation resets to full list");
+      assert.equal(filterSuggestions(models, "m1, fa").length, 1);
+      assert.equal(filterSuggestions(models, "m1, fa")[0]!.value, "b/fast");
+      assert.deepEqual(filterSuggestions(models, "zzz"), []);
+    });
+
+    it("joinCompletion: first pick and comma continuation, no trailing comma", () => {
+      assert.equal(joinCompletion("", "a/m1"), "a/m1");
+      assert.equal(joinCompletion("a/m1,", "a/m2"), "a/m1, a/m2");
+      assert.equal(joinCompletion("a/m1, ", "a/m2"), "a/m1, a/m2");
+    });
+
+    it("escape hatch: Enter submits raw typed text even while suggestions show", () => {
+      const cfg: TestCfg = DEFAULTS();
+      const group: PanelGroup[] = [{
+        key: "g", label: "g", rows: [
+          row("model", "Model", "string", cfg.url, (v) => { cfg.url = String(v ?? ""); }, { completions: () => models }),
+        ],
+      }];
+      const model = new ConfigPanelModel(group, null, "t");
+      model.handleInput("\r"); // start editing row 0
+      for (const ch of "zz-custom") model.handleInput(ch); // raw text, matches nothing
+      model.handleInput("\r"); // Enter → raw submit, not a suggestion
+      assert.equal(cfg.url, "zz-custom");
+    });
+
+    it("Tab picks highlighted suggestion, comma continues", () => {
+      const cfg: TestCfg = DEFAULTS();
+      const group: PanelGroup[] = [{
+        key: "g", label: "g", rows: [
+          row("model", "Model", "string", cfg.url, (v) => { cfg.url = String(v ?? ""); }, { completions: () => models }),
+        ],
+      }];
+      const model = new ConfigPanelModel(group, null, "t");
+      model.handleInput("\r"); // edit
+      model.handleInput("\t"); // pick first → "a/m1"
+      for (const ch of ",") model.handleInput(ch); // "a/m1," → full list again
+      model.handleInput("\t"); // pick first → "a/m1, a/m1"... need second item
+      // ↓ then Tab: navigate to m2 before picking.
+      const cfg2: TestCfg = DEFAULTS();
+      const group2: PanelGroup[] = [{
+        key: "g", label: "g", rows: [
+          row("model", "Model", "string", cfg2.url, (v) => { cfg2.url = String(v ?? ""); }, { completions: () => models }),
+        ],
+      }];
+      const model2 = new ConfigPanelModel(group2, null, "t");
+      model2.handleInput("\r");
+      model2.handleInput("\t"); // a/m1
+      model2.handleInput(",");
+      model2.handleInput("\u001b[B"); // ↓ highlight m2
+      model2.handleInput("\t"); // a/m1, a/m2
+      model2.handleInput("\r"); // commit
+      assert.equal(cfg2.url, "a/m1, a/m2");
+      void cfg; void model;
     });
   });
 });

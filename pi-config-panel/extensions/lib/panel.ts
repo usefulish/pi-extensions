@@ -29,6 +29,13 @@ import type { Component, KeybindingsManager } from "@earendil-works/pi-tui";
 
 export type PanelRowKind = "toggle" | "string" | "number" | "action";
 
+/** Suggestion option for rows with inline completion support. */
+export interface PanelCompletionItem {
+  value: string;
+  label?: string;
+  description?: string;
+}
+
 export interface PanelRow {
   key: string;
   label: string;
@@ -36,6 +43,10 @@ export interface PanelRow {
   value: unknown;
   /** Mask the value in render + inline-edit hint (for secrets/tokens). */
   mask?: boolean;
+  /** When set, inline editing shows a suggestion list (↑/↓ + Tab to pick,
+   *  Enter always submits the typed text). Options are re-filtered against
+   *  the text after the last `,` so comma-separated values can be composed. */
+  completions?: () => PanelCompletionItem[];
   set(v: unknown): void;
 }
 
@@ -72,7 +83,7 @@ export function row(
   kind: PanelRowKind,
   value: unknown,
   set: (v: unknown) => void,
-  opts: { mask?: boolean } = {},
+  opts: { mask?: boolean; completions?: () => PanelCompletionItem[] } = {},
 ): PanelRow {
   const r: PanelRow = {
     key,
@@ -80,6 +91,7 @@ export function row(
     kind,
     value,
     mask: opts.mask,
+    ...(opts.completions && { completions: opts.completions }),
     set(v: unknown) {
       set(v);
       r.value = kind === "number" ? toInt(v, Number(r.value)) : v;
@@ -203,6 +215,35 @@ export function kindValue(kind: PanelRowKind, raw: string): unknown {
 }
 
 // ---------------------------------------------------------------------------
+// Inline completion helpers (pure — unit-tested without a TUI)
+// ---------------------------------------------------------------------------
+
+/** Split an edited value into the committed head (text before the last `,`)
+ *  and the live suffix being completed. Empty suffix → full option list. */
+function splitSegments(raw: string): { head: string; suffix: string } {
+  const idx = raw.lastIndexOf(",");
+  if (idx === -1) return { head: "", suffix: raw };
+  return { head: raw.slice(0, idx).trim(), suffix: raw.slice(idx + 1).replace(/^ /, "") };
+}
+
+/** Filter completion options against the live suffix after the last comma.
+ *  Empty suffix → every option (full list). Case-insensitive substring. */
+export function filterSuggestions(options: PanelCompletionItem[], raw: string): PanelCompletionItem[] {
+  const { suffix } = splitSegments(raw);
+  const q = suffix.trim().toLowerCase();
+  if (!q) return options;
+  return options.filter((o) => o.value.toLowerCase().includes(q) || (o.label ?? o.value).toLowerCase().includes(q));
+}
+
+/** Value produced by accepting `item.value` while editing `raw`: replaces only
+ *  the current segment — `head + ", " + value`, or `value` when no prior
+ *  segment. No trailing comma; the next pick starts a fresh empty suffix. */
+export function joinCompletion(raw: string, itemValue: string): string {
+  const { head } = splitSegments(raw);
+  return head ? `${head}, ${itemValue}` : itemValue;
+}
+
+// ---------------------------------------------------------------------------
 // Component implementation
 // ---------------------------------------------------------------------------
 
@@ -216,6 +257,9 @@ interface PanelTheme {
  *  the next screen fits all remaining groups (GATEWAY+IDENTITY+PEERS+UI).
  *  Whole groups only — a group is never split across screens. */
 const MAX_VISIBLE_ROWS = 18;
+
+/** Max inline suggestions shown while editing a completion row. */
+const MAX_SUGGESTIONS = 8;
 
 export class ConfigPanelModel implements Component {
   onRequestRender: (() => void) | null = null;
@@ -241,6 +285,9 @@ export class ConfigPanelModel implements Component {
   private scroll = 0; // first visible row index
   private editing: PanelRow | null = null;
   private input: Input | null = null;
+  /** Live suggestion list while editing a row that has completions. */
+  private suggestions: PanelCompletionItem[] = [];
+  private suggestionIdx = 0;
   private pendingPrompt: { label: string; onDone: (value: string | undefined) => void } | null = null;
   private _focused = false;
 
@@ -292,7 +339,7 @@ export class ConfigPanelModel implements Component {
     const w = Math.max(20, width);
     const bold = this.theme?.bold ? this.theme.bold.bind(this.theme) : (t: string) => t;
     lines.push(this.color("accent", bold(this.title)));
-    lines.push(this.color("dim", "↑/↓ navigate · Enter edit/toggle · Esc save & close"));
+    lines.push(this.color("dim", this.editing?.completions ? "↑/↓ highlight · Tab pick · Enter keep typed · Esc close" : "↑/↓ navigate · Enter edit/toggle · Esc save & close"));
     lines.push("");
 
     // Prompt mode (action input): show only the prompt + inline input.
@@ -382,11 +429,23 @@ export class ConfigPanelModel implements Component {
     const mark = selected ? this.color("accent", "›") : " ";
     const masked = r.mask && String(r.value ?? "") !== "";
     if (this.editing === r) {
-      // Inline input row — show the input's own render (single line) plus the
-      // current value as a hint (the input starts empty so typing replaces).
+      // Inline input row — the input's own render (single line) plus the
+      // current value as a hint, then the live suggestion list (Tab picks).
       const inputLines = this.input ? this.input.render(width - 4) : ["…"];
       const hint = this.color("dim", masked ? " (was: ••••)" : ` (was: ${String(r.value ?? "")})`);
-      return `${mark} ${r.label}: ${inputLines[0] ?? ""}${hint}`;
+      const lines = [`${mark} ${r.label}: ${inputLines[0] ?? ""}${hint}`];
+      if (this.suggestions.length > 0) {
+        for (let i = 0; i < this.suggestions.length; i++) {
+          const s = this.suggestions[i]!;
+          const hl = i === this.suggestionIdx;
+          const label = s.label ?? s.value;
+          const desc = s.description ? this.color("dim", ` — ${s.description}`) : "";
+          const text = `    ${hl ? this.color("accent", "›") : " "}` +
+            (hl ? this.color("text", `${label}${desc}`) : this.color("dim", `${label}${desc}`));
+          lines.push(truncateToWidth(text, width));
+        }
+      }
+      return lines.join("\n");
     }
     let valueText: string;
     if (r.kind === "toggle") {
@@ -403,9 +462,22 @@ export class ConfigPanelModel implements Component {
   }
 
   handleInput(data: string): void {
-    // While editing or prompting, route ALL keys to the inline input.
+    // While editing or prompting, route ALL keys to the inline input — except
+    // suggestion navigation (↑/↓) and pick (Tab) while a completion list is up.
+    // Enter always submits the typed text (escape hatch for custom refs); Tab
+    // fills the input with the highlighted option; Esc cancels via Input.
     if ((this.editing || this.pendingPrompt) && this.input) {
+      if (this.editing && this.suggestions.length > 0) {
+        const kb = this.keybindings;
+        if (kb) {
+          if (kb.matches(data, "tui.select.up")) return this.moveSuggestion(-1);
+          if (kb.matches(data, "tui.select.down")) return this.moveSuggestion(1);
+        } else if (data === "\u001b[A" || data === "\u001bOA") return this.moveSuggestion(-1);
+        else if (data === "\u001b[B" || data === "\u001bOB") return this.moveSuggestion(1);
+        if (data === "\t") return this.acceptSuggestion();
+      }
       this.input.handleInput(data);
+      if (this.editing) this.refilterSuggestions();
       this.requestRender();
       return;
     }
@@ -450,6 +522,7 @@ export class ConfigPanelModel implements Component {
   prompt(label: string, onDone: (value: string | undefined) => void): void {
     this.pendingPrompt = { label, onDone };
     this.input = new Input();
+    this.suggestions = [];
     this.input.onSubmit = (raw: string) => {
       const p = this.pendingPrompt;
       this.pendingPrompt = null;
@@ -474,6 +547,8 @@ export class ConfigPanelModel implements Component {
   private startEdit(row: PanelRow): void {
     this.editing = row;
     this.input = new Input();
+    this.suggestionIdx = 0;
+    this.refilterSuggestions();
     this.input.onSubmit = (raw: string) => {
       // Empty submit on a masked (secret) row = keep the existing value.
       // The old secret is invisible (rendered as ••••), so a blank enter
@@ -493,14 +568,50 @@ export class ConfigPanelModel implements Component {
       }
       this.editing = null;
       this.input = null;
+      this.suggestions = [];
       this.requestRender();
     };
     this.input.onEscape = () => {
       this.editing = null;
       this.input = null;
+      this.suggestions = [];
       this.requestRender();
     };
     this.input.focused = this._focused;
+    this.requestRender();
+  }
+
+  /** Recompute the suggestion list from the input's current text (filtered by
+   *  the segment after the last `,`). */
+  private refilterSuggestions(): void {
+    if (!this.editing?.completions || !this.input) {
+      this.suggestions = [];
+      return;
+    }
+    this.suggestions = filterSuggestions(this.editing.completions(), this.input.getValue()).slice(0, MAX_SUGGESTIONS);
+    if (this.suggestionIdx >= this.suggestions.length) this.suggestionIdx = 0;
+  }
+
+  private moveSuggestion(delta: number): void {
+    const next = this.suggestionIdx + delta;
+    if (next >= 0 && next < this.suggestions.length) {
+      this.suggestionIdx = next;
+      this.requestRender();
+    }
+  }
+
+  /** Tab: fill the input with the highlighted option (segment replacement);
+   *  the user still commits with Enter (raw submit) or continues with `,`. */
+  private acceptSuggestion(): void {
+    const item = this.suggestions[this.suggestionIdx];
+    if (!item || !this.input) return;
+    const joined = joinCompletion(this.input.getValue(), item.value);
+    this.input.setValue(joined);
+    // pi-tui Input.setValue clamps the cursor instead of moving it to the end
+    // (stays at 0 on a fresh input), so park it after the inserted value.
+    (this.input as unknown as { cursor: number }).cursor = joined.length;
+    this.suggestionIdx = 0;
+    this.refilterSuggestions();
     this.requestRender();
   }
 
