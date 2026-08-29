@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.9 (2026-08-29)
+
+### Added
+
+- `/review` argument completion offers the thinking-level keywords
+  (`off...max`) before the free-form target.
+
 ## 0.2.8 (2026-08-05)
 
 ### Improvements
