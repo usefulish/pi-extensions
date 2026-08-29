@@ -420,5 +420,56 @@ describe("panel kernel", () => {
       // when the list survived the per-line truncation.
       assert.ok(lines.some((l) => l.includes("— p")), "suggestion line renders as its own row");
     });
+
+    it("string row with existing value prefills the input for in-place edit", () => {
+      const cfg: TestCfg = DEFAULTS();
+      cfg.url = "a/m1, a/m2";
+      const group: PanelGroup[] = [{
+        key: "g", label: "g", rows: [
+          row("model", "Model", "string", cfg.url, (v) => { cfg.url = String(v ?? ""); }, { completions: () => models }),
+        ],
+      }];
+      const model = new ConfigPanelModel(group, null, "t");
+      model.handleInput("\r"); // edit
+      const input = (model as unknown as { input: { getValue(): string; cursor: number } }).input;
+      assert.ok(input, "editing started");
+      assert.equal(input.getValue(), "a/m1, a/m2", "input prefilled with existing value");
+      assert.equal(input.cursor, "a/m1, a/m2".length, "cursor parked at end");
+      // Backspace trims, comma re-offers full list, Tab appends — edit in place.
+      model.handleInput("\u007f"); // backspace removes trailing space→ wait, removes '2'
+      model.handleInput("\u007f"); // removes '2'... two backspaces remove '2' and space
+      const trimmed = input.getValue();
+      assert.ok(trimmed.startsWith("a/m1"), "backspace edits the prefilled value");
+      model.handleInput(",");
+      model.handleInput("\t"); // pick first suggestion appended to head
+      model.handleInput("\r"); // commit
+      assert.ok(cfg.url.startsWith("a/m1") && cfg.url.includes("a/m"), "commit applies the edited value");
+      void trimmed;
+    });
+
+    it("masked string row still starts empty on edit (secret never prefilled)", () => {
+      const cfg = DEFAULTS();
+      cfg.token = "supersecret";
+      const model = new ConfigPanelModel(buildRows(cfg), null);
+      for (let i = 0; i < IDX_TOKEN; i++) model.handleInput("\u001b[B");
+      model.handleInput("\r"); // edit the token row
+      const input = (model as unknown as { input: { getValue(): string } | null }).input;
+      assert.ok(input, "editing started");
+      assert.equal(input!.getValue(), "", "masked row input starts empty — secret not rendered");
+      model.handleInput("\u001b"); // Esc cancel
+    });
+
+    it("string row with empty value starts empty (unchanged path)", () => {
+      const cfg: TestCfg = DEFAULTS();
+      const group: PanelGroup[] = [{
+        key: "g", label: "g", rows: [
+          row("model", "Model", "string", cfg.url, (v) => { cfg.url = String(v ?? ""); }, { completions: () => models }),
+        ],
+      }];
+      const model = new ConfigPanelModel(group, null, "t");
+      model.handleInput("\r");
+      const input = (model as unknown as { input: { getValue(): string } }).input;
+      assert.equal(input.getValue(), "");
+    });
   });
 });

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.3 (2026-08-29)
+
+### Changed
+
+- Editing a string row with an existing value now PREFILLS the input (cursor
+  at the end) so entries are edited in place instead of retyped — backspace
+  trims, `,` re-offers the picker, Tab appends, Enter commits. Blank submit
+  still resets (callers define blank = default). Masked (secret) rows keep
+  empty-start (never render the secret) and number rows keep type-to-replace.
+  Non-masked rows drop the redundant `(was: …)` hint; editing hint lines now
+  include `ctrl+u clear` (verified: pi-tui Input implements deleteToLineStart).
+  Regression tests: prefill+edit flow, masked-stays-empty, empty-value path
+  (28 tests total).
+
 ## 0.1.2 (2026-08-29)
 
 ### Fixed

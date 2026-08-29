@@ -339,7 +339,7 @@ export class ConfigPanelModel implements Component {
     const w = Math.max(20, width);
     const bold = this.theme?.bold ? this.theme.bold.bind(this.theme) : (t: string) => t;
     lines.push(this.color("accent", bold(this.title)));
-    lines.push(this.color("dim", this.editing?.completions ? "↑/↓ highlight · Tab pick · Enter keep typed · Esc close" : "↑/↓ navigate · Enter edit/toggle · Esc save & close"));
+    lines.push(this.color("dim", this.editing?.completions ? "↑/↓ highlight · Tab pick · ctrl+u clear · Enter keep typed · Esc close" : "↑/↓ navigate · Enter edit/toggle · Esc save & close"));
     lines.push("");
 
     // Prompt mode (action input): show only the prompt + inline input.
@@ -435,7 +435,9 @@ export class ConfigPanelModel implements Component {
       // element, and truncateToWidth collapses a multi-line styled blob into
       // one line, which silently dropped the suggestion list (real theme).
       const inputLines = this.input ? this.input.render(width - 4) : ["…"];
-      const hint = this.color("dim", masked ? " (was: ••••)" : ` (was: ${String(r.value ?? "")})`);
+      // Masked rows only: the secret never renders, so hint at its presence.
+      // Non-masked rows are prefilled — the value is in the input, no hint.
+      const hint = masked ? this.color("dim", " (was: ••••)") : "";
       const lines = [`${mark} ${r.label}: ${inputLines[0] ?? ""}${hint}`];
       if (this.suggestions.length > 0) {
         for (let i = 0; i < this.suggestions.length; i++) {
@@ -544,12 +546,23 @@ export class ConfigPanelModel implements Component {
     this.requestRender();
   }
 
-  /** Begin inline editing of a string/number row. The input starts empty so
-   *  typing replaces the value (standard "type a new port" UX); the old value
-   *  is shown as a hint on the row. */
+  /** Begin inline editing of a row. String rows with a value start PREFILLED
+   *  (cursor at end) so existing entries are edited in place, not retyped;
+   *  blank submit still resets (callers define blank = default). Masked rows
+   *  start empty — never render the secret — and number rows keep
+   *  type-to-replace (prefill + digits would append). */
   private startEdit(row: PanelRow): void {
     this.editing = row;
     this.input = new Input();
+    if (row.kind === "string" && !row.mask) {
+      const existing = String(row.value ?? "");
+      if (existing !== "") {
+        this.input.setValue(existing);
+        // pi-tui Input.setValue clamps the cursor instead of moving it — park
+        // at the end explicitly (same pattern as acceptSuggestion).
+        (this.input as unknown as { cursor: number }).cursor = existing.length;
+      }
+    }
     this.suggestionIdx = 0;
     this.refilterSuggestions();
     this.input.onSubmit = (raw: string) => {
