@@ -329,6 +329,20 @@ export default function (pi: ExtensionAPI) {
   });
   pi.registerCommand("subagent", {
     description: "Configure model roles (/subagent), list agents (/subagent list), agent details (/subagent <name>), role detail (/subagent @role), reload definitions (/subagent reload), history (/subagent history)",
+    getArgumentCompletions: (prefix) => {
+      const ctx = currentCtx;
+      const keywords = ["list", "all", "agents", "roles", "reload", "refresh", "history"];
+      const vocab = [...keywords];
+      if (ctx) {
+        const discovery = discoverAgents(ctx.cwd, "both", bundledAgentsDir);
+        vocab.push(...discovery.agents.map((a) => a.name));
+        try { vocab.push(...Object.keys(readSubagentRoles(ctx).roles).map((r) => `@${r}`)); } catch { /* roles optional */ }
+      }
+      const q = prefix.trim().toLowerCase();
+      const items = vocab.filter((v) => v.toLowerCase().startsWith(q))
+        .map((v) => ({ value: v, label: v, description: keywords.includes(v) ? "subagent command" : "agent / role" }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       const cmd = args.trim().toLowerCase();
       const discovery = discoverAgents(ctx.cwd, "both", bundledAgentsDir);
@@ -387,10 +401,17 @@ export default function (pi: ExtensionAPI) {
         }
         const current = readSubagentRolesGlobal();
         const working = buildRolesPanelCfg(discovery.agents, current);
+        const panelOptions = {
+          models: () => {
+            try { return ctx.modelRegistry.getAvailable().map((m) => `${m.provider}/${m.id}`); }
+            catch { return []; }
+          },
+          roles: () => [...Object.keys(DEFAULT_ROLES), ...Object.keys(readSubagentRolesGlobal().roles)],
+        };
         await openConfigPanel({
           ctx,
           cfg: working,
-          build: (cfg) => buildRows(cfg, discovery.agents),
+          build: (cfg) => buildRows(cfg, discovery.agents, panelOptions),
           title: "Subagent model roles",
           onSave: (saved, editedKeys) => {
             if (!(saved && editedKeys && editedKeys.size > 0)) return;

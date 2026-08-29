@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.1 (2026-08-29)
+
+### Added
+
+- `/subagent` argument completion: keywords (`list|all|agents|roles|reload|
+  refresh|history`), discovered agent names, and `@role` refs.
+- Roles editor rows now offer inline model suggestions (Tab to pick, Enter
+  keeps typed text) when run against @bacnh85/pi-config-panel >= 0.1.1; the
+  package stays compilable and fully functional on 0.1.0 (suggestions simply
+  absent), so no dependency floor bump is required.
+
 ## 0.16.0 (2026-08-23)
 
 ### Features

@@ -14,6 +14,15 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { row } from "@bacnh85/pi-config-panel";
 import type { PanelGroup } from "@bacnh85/pi-config-panel";
+
+// ponytail: local structural type — the kernel only reads value/label/
+// description, so this stays compatible with the published 0.1.0 range while
+// completion support ships in 0.1.1 (no static import of new kernel symbols).
+interface CompletionItem {
+  value: string;
+  label?: string;
+  description?: string;
+}
 import type { AgentConfig } from "./agents.ts";
 import { DEFAULT_ROLES, readSubagentRoles, type RolesConfig } from "./roles.ts";
 
@@ -83,6 +92,14 @@ export interface RolesPanelCfg {
   agentModels: Record<string, string>;
 }
 
+/** Completion sources for the panel's model rows (lazy — resolved per keypress). */
+export interface RolesPanelOptions {
+  /** Available model refs (`provider/id`), sorted; may be empty before registry sync. */
+  models: () => string[];
+  /** Known role names (defaults + configured), offered as `@role` on agent rows. */
+  roles: () => string[];
+}
+
 /** Seed a working config from current effective settings + bundled agents. */
 export function buildRolesPanelCfg(agents: AgentConfig[], current: RolesConfig): RolesPanelCfg {
   const roleNames = new Set([...Object.keys(DEFAULT_ROLES), ...Object.keys(current.roles)]);
@@ -98,21 +115,32 @@ export function buildRolesPanelCfg(agents: AgentConfig[], current: RolesConfig):
   return cfg;
 }
 
-/** Build panel groups. Role rows first, then one override row per agent. */
-export function buildRows(cfg: RolesPanelCfg, agents: AgentConfig[]): PanelGroup[] {
+/** Build panel groups. Role rows first, then one override row per agent.
+ *  `options` adds inline model/@role completions when provided (optional so
+ *  existing unit tests and non-TUI callers stay unchanged). */
+export function buildRows(cfg: RolesPanelCfg, agents: AgentConfig[], options?: RolesPanelOptions): PanelGroup[] {
   const defaultChain = (name: string) => Array.isArray(DEFAULT_ROLES[name]) ? (DEFAULT_ROLES[name] as string[]).join(", ") : String(DEFAULT_ROLES[name] ?? "");
+  const modelItems = (): CompletionItem[] =>
+    (options?.models() ?? []).sort().map((ref) => ({ value: ref }));
+  const roleItems = (): CompletionItem[] =>
+    (options?.roles() ?? []).map((name) => ({ value: `@${name}`, description: "role chain" }));
+  // ponytail: opts spread keeps this compilable against kernel 0.1.0 (whose
+  // row() opts type lacks `completions`); the runtime contract is additive and
+  // 0.1.1+ consumes the field. Drop the cast when the dep floor moves to 0.1.1.
+  const withCompletions = (completions: () => CompletionItem[]) =>
+    ({ completions }) as unknown as { mask?: boolean };
   const roleRows = Object.keys(cfg.roles).sort().map((name) => {
     // Label shows the default chain so blank is meaningful.
     return row(`role.${name}`, `@${name}  (default: ${defaultChain(name) || "none"})`, "string", cfg.roles[name], (v) => {
       cfg.roles[name] = String(v ?? "").trim();
-    });
+    }, withCompletions(modelItems));
   });
   const agentRows = agents.map((agent) =>
     row(`agent.${agent.name}`, agent.name, "string", cfg.agentModels[agent.name] ?? "", (v) => {
       const value = String(v ?? "").trim();
       if (value) cfg.agentModels[agent.name] = value;
       else delete cfg.agentModels[agent.name];
-    }),
+    }, withCompletions(() => [...modelItems(), ...roleItems()])),
   );
   return [
     { key: "roles", label: "Model roles (chain, blank = default)", rows: roleRows },
