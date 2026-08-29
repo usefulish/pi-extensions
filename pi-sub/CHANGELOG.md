@@ -66,6 +66,12 @@
 
 # Changelog
 
+## 0.1.33 (2026-08-29)
+
+### Added
+
+- `/sub` argument completion offers `refresh`.
+
 ## 0.1.29 (2026-08-15)
 
 ### Features

@@ -1295,6 +1295,12 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerCommand("sub", {
     description: "Show subscription usage for the current supported model provider (use /sub refresh to force refresh).",
+    getArgumentCompletions: (prefix) => {
+      const items = ["refresh"]
+        .filter((k) => k.startsWith(String(prefix || "").trim().toLowerCase()))
+        .map((k) => ({ value: k, label: k, description: "force refresh" }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       updateActiveAdapter(ctx, state, ctx.model);
       const command = args.trim().toLowerCase();
