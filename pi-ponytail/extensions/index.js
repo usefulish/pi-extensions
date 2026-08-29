@@ -89,6 +89,12 @@ export default function ponytailExtension(pi) {
 
   pi.registerCommand("ponytail", {
     description: `Set mode: ${RUNTIME_MODES.join("|")}. Commands: status, default <mode>`,
+    getArgumentCompletions: (prefix) => {
+      const q = String(prefix || "").trim().toLowerCase();
+      const vocab = [...RUNTIME_MODES, "status", "default"];
+      const items = vocab.filter((k) => k.startsWith(q)).map((k) => ({ value: k, label: k }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       const parsed = parsePonytailCommand(args, configuredDefaultMode);
 

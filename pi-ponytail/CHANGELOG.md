@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.12 (2026-08-29)
+
+### Added
+
+- `/ponytail` argument completion offers runtime modes plus `status|default`.
+
 ## 0.1.11 (2026-08-14)
 
 ### Fixes
