@@ -1565,6 +1565,12 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("plan-approve", {
     description: "Approve the current plan for current, fresh, or reviewed execution",
+    getArgumentCompletions: (prefix) => {
+      const items = ["current", "new", "flow"]
+        .filter((k) => k.startsWith(prefix.trim().toLowerCase()))
+        .map((k) => ({ value: k, label: k }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => handlePlanApproval(args, ctx),
   });
 
@@ -1646,6 +1652,29 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("plan-fallback", {
     description: "View, set, or clear the fallback model chain (tried on overload/rate-limit)",
+    getArgumentCompletions: (prefix) => {
+      // No trim before the set-head check — "set " (typing the separator) must
+      // enter model mode, not fall back to keyword matching.
+      const setHead = /^set\s+(.*)$/i.exec(prefix);
+      if (setHead) {
+        // Head = "set " + every complete token; only the last (incomplete)
+        // token is replaced by the completion, so already-picked chain refs
+        // survive ("set m1 " → "set m1 m2").
+        const tokens = (setHead[1] ?? "").split(/\s+/);
+        const typed = (tokens.pop() ?? "").toLowerCase();
+        const head = `set ${tokens.length > 0 ? tokens.join(" ") + " " : ""}`;
+        const refs = (lastCtx?.modelRegistry.getAvailable().map((m) => `${m.provider}/${m.id}`) ?? []);
+        const items = refs
+          .filter((ref) => ref.toLowerCase().includes(typed))
+          .map((ref) => ({ value: `${head}${ref}`, label: ref, description: "fallback model" }));
+        return items.length > 0 ? items : null;
+      }
+      const q = prefix.trim().toLowerCase();
+      const items = ["set", "clear"]
+        .filter((k) => k.startsWith(q))
+        .map((k) => ({ value: k, label: k }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       if (!preferences) return;
       const trimmed = args.trim();

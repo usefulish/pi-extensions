@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.2 (2026-08-29)
+
+### Added
+
+- Slash-argument autocomplete: `/goal` offers `status|pause|resume|clear`,
+  `/plan-approve` offers `current|new|flow`, `/goal-model` offers `off` +
+  models, and `/plan-fallback` offers `set|clear` plus head-preserving model
+  refs after `set ` (`set m1 ` completes to `set m1 m2`).
+
 ## 0.11.1 (2026-08-26)
 
 ### Fixes

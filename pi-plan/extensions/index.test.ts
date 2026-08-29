@@ -3394,3 +3394,39 @@ describe("flow loop regression coverage", () => {
     assert.equal(state.customMessages.length, 0, "malformed review never reports clean completion");
   });
 });
+
+describe("slash-argument completions", () => {
+  it("/plan-fallback set preserves the typed head in completion values", async () => {
+    const { commands, handlers } = createFakePi([]);
+    const ctx = fakeCtx({
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "prov", id: "m1", contextWindow: 8_000 },
+          { provider: "prov", id: "m2", contextWindow: 8_000 },
+        ],
+        find: () => undefined,
+      },
+    });
+    await handlers.session_start?.[0]({ reason: "startup" }, ctx);
+    const cmd = commands["plan-fallback"];
+    const first = cmd.getArgumentCompletions("set");
+    assert.deepEqual(first.map((i: any) => i.value), ["set", "clear"].filter((v) => v.startsWith("set")));
+    const items = cmd.getArgumentCompletions("set ") as Array<{ value: string; label: string }>;
+    assert.ok(items.length >= 2);
+    for (const item of items) {
+      assert.ok(item.value.startsWith("set "), `head preserved: ${item.value}`);
+    }
+    assert.ok(items.some((i) => i.value === "set prov/m1"));
+    const narrowed = cmd.getArgumentCompletions("set prov/m1 ") as Array<{ value: string }>;
+    assert.ok(narrowed.every((i) => i.value.startsWith("set prov/m1 ")), "second-chain refs keep first ref in head");
+  });
+
+  it("/plan-approve and /goal offer their keyword vocabularies", () => {
+    const { commands } = createFakePi([]);
+    const approve = commands["plan-approve"].getArgumentCompletions("") as Array<{ value: string }>;
+    assert.deepEqual(approve.map((i) => i.value), ["current", "new", "flow"]);
+    const goal = commands["goal"].getArgumentCompletions("") as Array<{ value: string }>;
+    assert.deepEqual(goal.map((i) => i.value), ["status", "pause", "resume", "clear"]);
+    assert.equal(commands["goal"].getArgumentCompletions("fix the bug"), null, "free-text objective → no popup");
+  });
+});
