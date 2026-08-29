@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.13 (2026-08-29)
+
+### Added
+
+- `/rtk` argument completion offers `enable|disable|status`.
+
 ## 0.1.12 (2026-08-05)
 
 ### Improvements

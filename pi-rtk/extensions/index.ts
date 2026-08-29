@@ -186,6 +186,12 @@ export default function piRtkExtension(pi: ExtensionAPI) {
 
   pi.registerCommand("rtk", {
     description: "Control pi-rtk shell command rewriting",
+    getArgumentCompletions: (prefix) => {
+      const items = RTK_SUBCOMMANDS
+        .filter((k) => k.startsWith(prefix.trim().toLowerCase()))
+        .map((k) => ({ value: k, label: k }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       await handleRtkCommand(pi, args, ctx);
     },
