@@ -407,7 +407,7 @@ export class ConfigPanelModel implements Component {
       for (let j = 0; j < g.rows.length; j++) {
         const absIdx = groupStarts[i]! + j;
         const selected = absIdx === this.selected;
-        lines.push(this.renderRow(g.rows[j]!, selected, w));
+        lines.push(...this.renderRow(g.rows[j]!, selected, w));
       }
     }
 
@@ -425,12 +425,15 @@ export class ConfigPanelModel implements Component {
     return lines.map((l) => truncateToWidth(l, w));
   }
 
-  private renderRow(r: PanelRow, selected: boolean, width: number): string {
+  private renderRow(r: PanelRow, selected: boolean, width: number): string[] {
     const mark = selected ? this.color("accent", "›") : " ";
     const masked = r.mask && String(r.value ?? "") !== "";
     if (this.editing === r) {
       // Inline input row — the input's own render (single line) plus the
       // current value as a hint, then the live suggestion list (Tab picks).
+      // Lines array, NOT a joined string: the outer render truncates each
+      // element, and truncateToWidth collapses a multi-line styled blob into
+      // one line, which silently dropped the suggestion list (real theme).
       const inputLines = this.input ? this.input.render(width - 4) : ["…"];
       const hint = this.color("dim", masked ? " (was: ••••)" : ` (was: ${String(r.value ?? "")})`);
       const lines = [`${mark} ${r.label}: ${inputLines[0] ?? ""}${hint}`];
@@ -442,10 +445,10 @@ export class ConfigPanelModel implements Component {
           const desc = s.description ? this.color("dim", ` — ${s.description}`) : "";
           const text = `    ${hl ? this.color("accent", "›") : " "}` +
             (hl ? this.color("text", `${label}${desc}`) : this.color("dim", `${label}${desc}`));
-          lines.push(truncateToWidth(text, width));
+          lines.push(text);
         }
       }
-      return lines.join("\n");
+      return lines;
     }
     let valueText: string;
     if (r.kind === "toggle") {
@@ -458,7 +461,7 @@ export class ConfigPanelModel implements Component {
       valueText = String(r.value ?? "");
     }
     const rowText = `${mark} ${r.label}: ${valueText}`;
-    return selected ? this.color("text", rowText) : this.color("dim", rowText);
+    return [selected ? this.color("text", rowText) : this.color("dim", rowText)];
   }
 
   handleInput(data: string): void {

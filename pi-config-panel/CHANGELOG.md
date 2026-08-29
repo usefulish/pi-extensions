@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.2 (2026-08-29)
+
+### Fixed
+
+- Inline suggestion list never rendered in the live TUI: `renderRow` returned
+  the editing row as one joined string and `truncateToWidth` collapsed the
+  ANSI-styled multi-line blob to its first line, so the popup was invisible
+  and Tab always picked the first (alphabetical) item. `renderRow` now returns
+  an array of lines — suggestions render as their own rows, `↑/↓` navigate,
+  Tab picks the highlighted one. Regression test renders with a styled theme
+  and asserts the suggestion row survives truncation.
+
 ## 0.1.1 (2026-08-29)
 
 ### Added

@@ -396,5 +396,29 @@ describe("panel kernel", () => {
       assert.equal(cfg2.url, "a/m1, a/m2");
       void cfg; void model;
     });
+
+    it("suggestion lines survive render truncation (multi-line row bug)", () => {
+      // Regression: renderRow returned the editing row as ONE joined string;
+      // truncateToWidth collapsed the ANSI-styled blob to its first line and
+      // the suggestion list never appeared — Tab then always picked the first
+      // (alphabetical) item because users couldn't see or navigate the list.
+      const cfg: TestCfg = DEFAULTS();
+      const group: PanelGroup[] = [{
+        key: "g", label: "g", rows: [
+          row("model", "Model", "string", cfg.url, (v) => { cfg.url = String(v ?? ""); }, { completions: () => models }),
+        ],
+      }];
+      // Real styled theme — the ANSI codes are what triggered the collapse.
+      const theme = { fg: (_style: string, text: string) => `\u001b[90m${text}\u001b[0m`, bold: (t: string) => `\u001b[1m${t}\u001b[0m` };
+      const model = new ConfigPanelModel(group, theme as any, "t");
+      model.handleInput("\r"); // edit
+      for (const ch of "m1") model.handleInput(ch); // narrows to a/m1
+      const out = model.render(80).join("\n");
+      const lines = out.split("\n");
+      assert.ok(lines.some((l) => l.includes("Model:") && l.includes("m1")), "input line renders");
+      // Suggestion lines carry the description suffix ("— p") — they only exist
+      // when the list survived the per-line truncation.
+      assert.ok(lines.some((l) => l.includes("— p")), "suggestion line renders as its own row");
+    });
   });
 });
