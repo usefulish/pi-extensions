@@ -8,6 +8,10 @@ import { configSummary, getSettings, readStoredApiKey, maskApiKey, normalizeUrl 
 import { registerProvider, PROVIDER_ID } from "../lib/provider.js";
 import { refreshActiveModel } from "../index.js";
 
+/** Router model ids from the last /router-model invocation — the completion
+ *  hook has no ctx, so it replays this cache (empty until first use). */
+let lastRouterModelIds: string[] | undefined;
+
 function settingsPath(): string {
   const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
   return join(agentDir, "settings.json");
@@ -80,6 +84,16 @@ export function registerCommands(pi: ExtensionAPI, _getSettings: () => RouterSet
 
   pi.registerCommand("router-model", {
     description: "Search and select a router model by name.",
+    getArgumentCompletions: (prefix) => {
+      // Model list is cached by the last invocation (registry is not reachable
+      // synchronously from the completion hook on first use).
+      const ids = lastRouterModelIds ?? [];
+      const q = (prefix || "").trim().toLowerCase();
+      const items = ids
+        .filter((id) => id.toLowerCase().includes(q))
+        .map((id) => ({ value: id, label: id }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       if (ctx.mode !== "tui") {
         ctx.ui.notify("/router-model requires interactive (TUI) mode.", "error");
@@ -89,6 +103,7 @@ export function registerCommands(pi: ExtensionAPI, _getSettings: () => RouterSet
         .getAll()
         .filter((m) => m.provider === PROVIDER_ID)
         .map((m) => m.id);
+      lastRouterModelIds = ids;
       if (ids.length === 0) {
         ctx.ui.notify("No router models available yet — open /models or /login router to trigger discovery.", "error");
         return;

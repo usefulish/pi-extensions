@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.4 (2026-08-29)
+
+### Added
+
+- `/router-model` argument completion offers cached router model ids
+  (populated by the first `/router-model` invocation).
+
 ## 1.1.3 — 2026-08-26
 
 ### Fixed
