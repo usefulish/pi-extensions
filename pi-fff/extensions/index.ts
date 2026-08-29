@@ -1945,6 +1945,12 @@ export default function fffExtension(pi: ExtensionAPI) {
 
   pi.registerCommand("fff-mode", {
     description: "Show or set FFF mode: /fff-mode [tools-and-ui | tools-only | override]",
+    getArgumentCompletions: (prefix) => {
+      const items = VALID_MODES
+        .filter((k) => k.startsWith(prefix.trim().toLowerCase()))
+        .map((k) => ({ value: k, label: k }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       const arg = (args || "").trim();
 

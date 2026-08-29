@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.10 (2026-08-29)
+
+### Added
+
+- `/fff-mode` argument completion offers `tools-and-ui|tools-only|override`.
+
 ## 0.7.9 (2026-08-05)
 
 ### Improvements
