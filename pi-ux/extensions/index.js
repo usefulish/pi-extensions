@@ -178,6 +178,12 @@ export default function uxExtension(pi) {
 
   pi.registerCommand("ux", {
     description: `Anti-slop UI/UX discipline. Modes: ${RUNTIME_MODES.join("|")}. Commands: status, default <mode>`,
+    getArgumentCompletions: (prefix) => {
+      const q = String(prefix || "").trim().toLowerCase();
+      const vocab = [...RUNTIME_MODES, "status", "default"];
+      const items = vocab.filter((k) => k.startsWith(q)).map((k) => ({ value: k, label: k }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       const parsed = parseUxCommand(args, configuredDefaultMode);
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.5 (2026-08-29)
+
+### Added
+
+- `/ux` argument completion offers runtime modes plus `status|default`.
+
 ## 0.4.4
 
 - Patch version bump for release sync and package documentation update.
