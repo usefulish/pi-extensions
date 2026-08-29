@@ -418,6 +418,14 @@ The isolated session's activity is **surfaced to the host TUI** as transcript
 messages + toasts (see "Inbound activity in the host TUI") — you see what the
 inbound task is doing without it running in your live session.
 
+The isolated session runs the **full extension lifecycle**: after creation it
+fires `session_start` (via `bindExtensions`, the same thing the SDK's print
+mode does), so extensions that wire their tools on session start — e.g.
+pi-mcp-extension's MCP servers — are available to the dispatched agent, and
+`session_shutdown` is emitted on completion so extension-started processes
+are cleaned up. The child never touches the host's own inbound server:
+server lifecycle handlers are host-session-only.
+
 ## Hermes interop
 
 The primary interop target. Hermes (`~/.hermes/hermes-agent`, A2A platform
