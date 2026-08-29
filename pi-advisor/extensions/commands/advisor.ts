@@ -130,9 +130,13 @@ export function registerAdvisor(pi: ExtensionAPI, state: AdvisorState): void {
   pi.registerCommand("advisor", {
     description: "Configure the advisor: /advisor [model hint|on|off|status]",
     getArgumentCompletions: (prefix) => {
+      const kws = ["on", "off", "status", "watch-off"].filter((k) => k.startsWith(prefix.toLowerCase()));
+      const kwItems = kws.map((k) => ({ value: k, label: k, description: k === "watch-off" ? "disable background watch" : `advisor ${k}` }));
       const models = registry?.getAvailable() ?? [];
       const matches = prefix ? fuzzyFilter(models, prefix, modelSearchText) : models;
-      return matches.map((model) => ({ value: modelRef(model), label: model.id, description: model.provider }));
+      const modelItems = matches.map((model) => ({ value: modelRef(model), label: model.id, description: model.provider }));
+      const items = [...kwItems, ...modelItems];
+      return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
       registry = ctx.modelRegistry;

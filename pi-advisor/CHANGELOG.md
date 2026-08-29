@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5 (2026-08-29)
+
+### Added
+
+- `/advisor` argument completion now offers the `on` / `off` / `status` /
+  `watch-off` keywords ahead of model suggestions (previously only models were
+  offered, so keywords could not be discovered or completed).
+
 ## 0.1.4 (2026-08-26)
 
 ### Changed

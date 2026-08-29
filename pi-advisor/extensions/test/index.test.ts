@@ -165,4 +165,27 @@ describe("index wiring", () => {
     await fire(pi, state, "agent_settled", fakeCtx(toolCalls(4)));
     assert.equal(calls, 0, "legacy model not resurrected after explicit disable");
   });
+
+  it("/advisor completions offer keywords ahead of models, filtered by prefix", () => {
+    const { pi, state } = createFakePi();
+    piAdvisor(pi);
+    const ctx = fakeCtx([]);
+    ctx.modelRegistry.getAvailable = () => [
+      { provider: "p", id: "m1", contextWindow: 8_000 },
+      { provider: "p", id: "m2", contextWindow: 8_000 },
+    ] as any;
+    const cmd = state.commands.get("advisor");
+    cmd.handler("status", ctx); // seeds the module-level registry from ctx
+    const all = cmd.getArgumentCompletions("");
+    const values = all.map((i: any) => i.value);
+    for (const kw of ["on", "off", "status", "watch-off"]) {
+      assert.ok(values.includes(kw), `keyword ${kw} offered at empty prefix`);
+      assert.ok(values.indexOf(kw) < values.findIndex((v: string) => v.includes("/")), `keyword ${kw} sorts before model items`);
+    }
+    const o = cmd.getArgumentCompletions("o").map((i: any) => i.value);
+    assert.ok(o.includes("on") && o.includes("off"), "keywords survive prefix filtering");
+    assert.ok(!o.includes("status"), "non-matching keyword filtered out");
+    const none = cmd.getArgumentCompletions("zzz");
+    assert.equal(none, null, "no matches → null (popup suppressed)");
+  });
 });
