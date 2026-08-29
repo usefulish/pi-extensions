@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.4 (2026-08-29)
+
+### Changed
+
+- The inline picker is now cursor-aware: it edits whichever comma-separated
+  entry the cursor sits in, not just the last one. Arrow left/right into an
+  earlier entry retargets the list live (full list on a pure cursor move;
+  typing filters as usual), Tab replaces that entry and PRESERVES the other
+  segments, and the cursor parks at the end of the replaced segment.
+  filterSuggestions/joinCompletion take an optional cursor (legacy two-arg
+  calls keep last-segment behavior). Tests: helper cases + component flow
+  (30 total).
+
 ## 0.1.3 (2026-08-29)
 
 ### Changed
