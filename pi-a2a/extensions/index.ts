@@ -13,6 +13,7 @@
  */
 
 import { homedir } from "node:os";
+import { chmodSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -28,6 +29,7 @@ import {
 } from "./lib/client";
 import { A2AServer, type SessionRunner } from "./lib/server";
 import { formatPeers, listPeers } from "./lib/discovery";
+import { childTranscriptDir } from "./lib/persistence";
 import { activityLine, activityStatusLine, activityToText, classifyLine, dispatchLabel, preview, type InboundActivity } from "./lib/activity";
 import { openPanel, type PanelAction } from "./lib/config-panel";
 
@@ -52,8 +54,8 @@ function cfgFor(ctx: ExtensionContext): A2AConfig {
 // (Same proven path pi-subagent uses; lazy import to avoid load cost.)
 // ---------------------------------------------------------------------------
 
-function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
-  return async ({ message, signal, onProgress }) => {
+function makeSessionRunner(ctx: ExtensionContext, cfg?: A2AConfig): SessionRunner {
+  return async ({ message, taskId, signal, onProgress }) => {
     const sdk = await import("@earendil-works/pi-coding-agent");
     const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader } = sdk;
     const modelRegistry = ctx.modelRegistry as any;
@@ -95,12 +97,57 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       // same behavior as pi-subagent's runner; never prompt (no UI).
       resolveProjectTrust: async () => (ctx as any).isProjectTrusted?.() ?? false,
     });
+    // Persist the child's transcript (fleet task #252). Stock pi-a2a ran
+    // children on SessionManager.inMemory, so a dispatched worker that
+    // stalled or was killed mid-run left NO step history — the only evidence
+    // was its final A2A reply (196d39be: a worker stopped mid-sentence at
+    // 989s and the cause could not be determined). AgentSession appends every
+    // entry (user message, assistant turns, tool calls and results) to its
+    // SessionManager synchronously as it runs, so a REAL SessionManager
+    // gives each dispatch a full pi session file at
+    // <agentDir>/a2a_sessions/<timestamp>_<taskId>.jsonl — openable with pi's
+    // own session tooling and complete up to the moment of death even on a
+    // window kill (the file materializes on the child's first assistant
+    // output; a child that dies before ANY model output leaves no transcript,
+    // covered instead by the FAILED task + audit line). Keyed by the A2A
+    // taskId so ledger rows, the audit log, and the transcript all join on
+    // one key; the host session lineage is preserved via parentSession.
+    // Privacy: the transcript carries everything the worker read — the file
+    // is chmod 600 at turn end, and server.childTranscriptRetentionDays
+    // bounds its lifetime (swept on server start); set
+    // a2a.server.childTranscripts=false for stock in-memory behavior.
+    // Best-effort by design: any persistence failure falls back to the
+    // in-memory manager — forensics must never break the dispatch itself.
+    let transcriptPath: string | undefined;
+    let sessionManager: any;
+    if (taskId && cfg?.server.childTranscripts !== false) {
+      try {
+        const hostSession = (ctx as any).sessionManager;
+        const hostSessionFile = hostSession?.getSessionFile?.();
+        sessionManager = SessionManager.create(cwd, childTranscriptDir(piDir()), {
+          id: taskId,
+          ...(hostSessionFile ? { parentSession: hostSessionFile } : {}),
+        });
+        // Attribution entry: plain custom entries persist in the session
+        // file but never enter the child's LLM context. Ties the transcript
+        // to the dispatch and the host session lineage.
+        sessionManager.appendCustomEntry("a2a/dispatch", {
+          taskId,
+          hostSessionId: hostSession?.getSessionId?.(),
+          hostSessionFile,
+        });
+        transcriptPath = sessionManager.getSessionFile();
+      } catch {
+        sessionManager = undefined; // fall back to stock in-memory
+      }
+    }
+    if (!sessionManager) sessionManager = SessionManager.inMemory(cwd);
     const created = await createAgentSession({
       cwd,
       model,
       thinkingLevel: ctx.thinkingLevel ?? "medium",
       resourceLoader,
-      sessionManager: SessionManager.inMemory(cwd),
+      sessionManager,
       settingsManager,
       ...(modelRegistry?.runtime ? { modelRuntime: modelRegistry.runtime } : {}),
       ...(modelRegistry?.authStorage
@@ -128,6 +175,9 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
     // text — consumed by the stunted-reply check after the run completes.
     let terminalStopReason: string | undefined;
     let terminalHadText = false;
+    // Cheap progress marker for post-mortems (#256): assistant turns + tool
+    // executions observed before the run ended.
+    let stepCount = 0;
     let resolveDone!: () => void;
     const done = new Promise<void>((r) => (resolveDone = r));
     const unsub = session.subscribe((event: any) => {
@@ -135,7 +185,11 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       // assistant text deltas become one-line progress entries.
       const line = activityLine(event);
       if (line && onProgress) onProgress(line);
+      if (event.type === "tool_execution_start") {
+        stepCount += 1;
+      }
       if (event.type === "message_end" && event.message?.role === "assistant") {
+        stepCount += 1;
         // Agent-session events carry the OpenAI-style message shape: the text
         // parts live under `content` (e.g. [{type:"text",text:"..."}]), not
         // `parts` — reading `parts` yields nothing and the reply comes back
@@ -201,6 +255,17 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       } catch {
         /* ignore */
       }
+      // The session file materializes lazily (SessionManager buffers
+      // entries until the first assistant message), so tighten permissions
+      // here — best-effort 0600 for a file that carries everything the
+      // worker read.
+      if (transcriptPath) {
+        try {
+          chmodSync(transcriptPath, 0o600);
+        } catch {
+          /* file never materialized (no model output) — nothing to chmod */
+        }
+      }
     }
     if (!completedCleanly) {
       // The reply window expired (or the caller canceled) mid-run: the race
@@ -208,10 +273,20 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       // holds at most a truncated partial answer. Throw so messageSend maps
       // the task to FAILED/CANCELED — returning normally takes the success
       // path and hands the dispatcher a truncated reply labelled COMPLETED,
-      // indistinguishable from a finished worker (#247).
-      throw signal.reason instanceof Error
-        ? signal.reason
-        : new Error("inbound session aborted before completing");
+      // indistinguishable from a finished worker (#247). Carry the transcript
+      // forensics on the error so the failure audit line points at the step
+      // history (#252).
+      const err =
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error("inbound session aborted before completing");
+      try {
+        if (transcriptPath) (err as any).transcriptPath = transcriptPath;
+        (err as any).stepCount = stepCount;
+      } catch {
+        /* best-effort */
+      }
+      throw err;
     }
 
     if (terminalStopReason === "length" && !terminalHadText) {
@@ -225,7 +300,12 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
         "run ended on a length stop with no assistant text — no usable reply was produced (output capped before any content; context-clamped max_tokens?)",
       );
     }
-    return { reply: reply || "(no reply)", inputRequired };
+    return {
+      reply: reply || "(no reply)",
+      inputRequired,
+      ...(transcriptPath ? { transcriptPath } : {}),
+      stepCount,
+    };
   };
 }
 
@@ -848,7 +928,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
                 ctx: ectx,
                 cwd: ectx.cwd,
                 piDir: piDir(),
-                runner: makeSessionRunner(ectx),
+                runner: makeSessionRunner(ectx, fresh),
                 api: pi,
                 onActivity: (a) => broadcastActivity(pi, ectx, fresh, a),
                 onStatus: statusSink(pi, ectx),
@@ -890,7 +970,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
             ctx: ectx,
             cwd: ectx.cwd,
             piDir: piDir(),
-            runner: makeSessionRunner(ectx),
+            runner: makeSessionRunner(ectx, cfg),
             api: pi,
             onActivity: (a) => broadcastActivity(pi, ectx, cfg, a),
             onStatus: statusSink(pi, ectx),
@@ -988,7 +1068,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
         ctx,
         cwd: ctx.cwd,
         piDir: piDir(),
-        runner: makeSessionRunner(ctx),
+        runner: makeSessionRunner(ctx, cfg),
         api: pi,
         onActivity: (a) => broadcastActivity(pi, ctx, cfg, a),
         onStatus: statusSink(pi, ctx),

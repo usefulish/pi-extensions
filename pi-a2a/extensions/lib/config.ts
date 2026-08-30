@@ -127,6 +127,18 @@ export interface A2AConfig {
     allowAllUsers: boolean;
     maxPingpongTurns: number;
     rateLimitPerMin: number;
+    /** Persist each dispatched child session's transcript to
+     *  <agentDir>/a2a_sessions/<timestamp>_<taskId>.jsonl (fleet task #252).
+     *  Stock pi-a2a ran children on an in-memory SessionManager, so a worker
+     *  that stalled or was killed mid-run left no step history at all. On,
+     *  every entry (user message, assistant turns, tool calls and results)
+     *  is written synchronously and the file is a real pi session, openable
+     *  with pi's own session tooling. Off = fully in-memory (stock). */
+    childTranscripts: boolean;
+    /** Delete child transcripts older than N days when the inbound server
+     *  starts. 0 = keep forever. Transcripts carry everything the dispatched
+     *  worker read, so keep the retention window bounded. */
+    childTranscriptRetentionDays: number;
     skills: Array<{ id: string; name: string; description: string; tags?: string[] }>;
   };
   timeouts: { send: number; async: number; stream: number };
@@ -170,6 +182,8 @@ const DEFAULTS: A2AConfig = {
     allowAllUsers: false,
     maxPingpongTurns: 5,
     rateLimitPerMin: 60,
+    childTranscripts: true,
+    childTranscriptRetentionDays: 30,
     skills: [],
   },
   timeouts: { send: 300000, async: 30000, stream: 120000 },
@@ -443,6 +457,14 @@ export function loadConfig(opts: {
   cfg.server.allowAllUsers = bool(srv.allowAllUsers ?? env.A2A_ALLOW_ALL_USERS, DEFAULTS.server.allowAllUsers);
   cfg.server.maxPingpongTurns = num(srv.maxPingpongTurns ?? env.A2A_MAX_PINGPONG_TURNS, DEFAULTS.server.maxPingpongTurns);
   cfg.server.rateLimitPerMin = num(srv.rateLimitPerMin ?? env.A2A_RATE_LIMIT, DEFAULTS.server.rateLimitPerMin);
+  cfg.server.childTranscripts = bool(
+    srv.childTranscripts ?? env.A2A_CHILD_TRANSCRIPTS,
+    DEFAULTS.server.childTranscripts,
+  );
+  cfg.server.childTranscriptRetentionDays = num(
+    srv.childTranscriptRetentionDays ?? env.A2A_CHILD_TRANSCRIPT_RETENTION_DAYS,
+    DEFAULTS.server.childTranscriptRetentionDays,
+  );
   cfg.server.skills = Array.isArray(srv.skills) ? srv.skills : [];
 
   // Timeouts

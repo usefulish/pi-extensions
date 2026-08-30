@@ -21,6 +21,8 @@ export function DEFAULTS(): A2AConfig {
       allowAllUsers: false,
       maxPingpongTurns: 5,
       rateLimitPerMin: 60,
+      childTranscripts: true,
+      childTranscriptRetentionDays: 30,
       skills: [],
     },
     timeouts: { send: 120000, async: 30000, stream: 120000 },

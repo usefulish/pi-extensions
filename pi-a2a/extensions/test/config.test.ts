@@ -308,6 +308,46 @@ describe("config", () => {
     });
   });
 
+  describe("server.childTranscripts (#252)", () => {
+    it("defaults to on with a 30-day retention", () => {
+      const cfg = withIsolatedPiDir((dir) => loadConfig({ cwd: dir }));
+      assert.isTrue(cfg.server.childTranscripts);
+      assert.equal(cfg.server.childTranscriptRetentionDays, 30);
+    });
+    it("parses from settings.json", () => {
+      withIsolatedPiDir((dir) => {
+        fs.mkdirSync(path.join(dir, ".pi"), { recursive: true });
+        fs.writeFileSync(
+          path.join(dir, ".pi", "settings.json"),
+          JSON.stringify({ a2a: { server: { childTranscripts: false, childTranscriptRetentionDays: 7 } } }),
+        );
+        const cfg = loadConfig({ cwd: dir });
+        assert.isFalse(cfg.server.childTranscripts);
+        assert.equal(cfg.server.childTranscriptRetentionDays, 7);
+      });
+    });
+    it("parses from env A2A_CHILD_TRANSCRIPTS / A2A_CHILD_TRANSCRIPT_RETENTION_DAYS", () => {
+      withIsolatedPiDir((dir) => {
+        const olds: [string, string | undefined][] = [
+          ["A2A_CHILD_TRANSCRIPTS", process.env.A2A_CHILD_TRANSCRIPTS],
+          ["A2A_CHILD_TRANSCRIPT_RETENTION_DAYS", process.env.A2A_CHILD_TRANSCRIPT_RETENTION_DAYS],
+        ];
+        process.env.A2A_CHILD_TRANSCRIPTS = "false";
+        process.env.A2A_CHILD_TRANSCRIPT_RETENTION_DAYS = "14";
+        try {
+          const cfg = loadConfig({ cwd: dir });
+          assert.isFalse(cfg.server.childTranscripts);
+          assert.equal(cfg.server.childTranscriptRetentionDays, 14);
+        } finally {
+          for (const [k, v] of olds) {
+            if (v === undefined) delete process.env[k];
+            else process.env[k] = v;
+          }
+        }
+      });
+    });
+  });
+
   describe("ui.transcript", () => {
     it("defaults to true", () => {
       const cfg = withIsolatedPiDir((dir) => loadConfig({ cwd: dir }));
