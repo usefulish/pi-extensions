@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.2 (2026-08-30)
+## 0.6.1 (2026-08-30)
 
 ### Changed
 
@@ -11,9 +11,7 @@
   hook.test.ts assertion updated to the compressed phrasing. No tool,
   parameter, or default changed.
 
-## 0.6.1 (2026-08-19)
-
-### Changed
+### Changed (2026-08-19)
 
 - `web_extract` agy backend default model updated to `gemini-3.7-flash-medium`
   — the current Flash generation in agy 1.1.x (3.6 is still served, this just
