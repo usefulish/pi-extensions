@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3 (2026-08-30)
+
+### Changed
+
+- Trimmed `agy_execute` model-routing promptGuidelines from 11 lines to 3
+  (default model, cross-review rule, diff-review rule) — duplicated the
+  model-routing table already in the host context. Saves ~120 tokens/turn.
+
 ## 0.3.2 (2026-08-19)
 
 ### Changed

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.2 (2026-08-30)
+
+### Changed
+
+- Trimmed static prompt overhead ~385 tokens/turn: compressed the injected
+  `Web Tool Routing` guidance block (1,247 -> 281 chars, same routing table
+  + backend rules), cut all 7 tools' promptGuidelines to <=2 unique lines,
+  and shortened web_crawl/web_screenshot schema descriptions. One
+  hook.test.ts assertion updated to the compressed phrasing. No tool,
+  parameter, or default changed.
+
 ## 0.6.1 (2026-08-19)
 
 ### Changed

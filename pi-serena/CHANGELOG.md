@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.14 (2026-08-30)
+
+### Changed
+
+- Trimmed static prompt overhead ~1,100 tokens/turn: deduped the
+  `context` param 11-context enum (was repeated in all 19 tool schemas via
+  shared constants), removed 18 redundant promptSnippet/promptGuidelines
+  pairs (kept the 2 restart cross-references), tightened
+  search_for_pattern/replace_content/project/timeout/max_answer_chars
+  descriptions. No tool, parameter, or default changed.
+
 ## 0.9.13 (2026-08-27)
 
 ### Changes
