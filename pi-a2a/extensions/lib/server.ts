@@ -167,6 +167,12 @@ class RateLimiter {
 // Session runner — the injectable boundary for testing
 // ---------------------------------------------------------------------------
 
+/**
+ * Contract: a normal return asserts the turn finished (or needs input). If
+ * the abort signal fired first, the runner MUST throw — messageSend routes
+ * any normal return after an abort through the failure classification
+ * anyway, and an honest throw carries the real error (timeout vs cancel).
+ */
 export interface SessionRunner {
   (opts: {
     message: string;
@@ -871,7 +877,15 @@ export class A2AServer {
     const startedAt = Date.now();
     try {
       const timeoutMs = this.cfg.server.replyTimeoutSec * 1000;
-      const timer = setTimeout(() => controller.abort(new Error("reply timeout")), timeoutMs);
+      const timer = setTimeout(
+        () =>
+          controller.abort(
+            new Error(
+              `reply timeout: exceeded the ${this.cfg.server.replyTimeoutSec}s reply window — session aborted mid-run, reply is truncated`,
+            ),
+          ),
+        timeoutMs,
+      );
       controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
       const wrapped = wrapInbound(identity, inboundText);
       const runner = this.requireRunner();
@@ -881,6 +895,18 @@ export class A2AServer {
         onProgress: (line) => this.onActivity?.({ type: "progress", taskId, line }),
       });
       clearTimeout(timer);
+      if (controller.signal.aborted) {
+        // Defense in depth (#247): a runner may return normally even though
+        // its abort signal fired — the stock runner's prompt promise resolves
+        // on session.abort() rather than rejecting, so without this check a
+        // killed worker came back TASK_STATE_COMPLETED with a truncated reply
+        // artifact. COMPLETED must mean the turn actually finished: route any
+        // post-abort return through the failure classification below
+        // (CANCELED for user cancel, FAILED otherwise).
+        throw controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new Error("task aborted before completion");
+      }
       const finalState = out.inputRequired ? STATE_INPUT_REQUIRED : STATE_COMPLETED;
       // Outbound redaction: replies cross the trust boundary back to a peer,
       // so scrub credential-shaped substrings (sk-*, ghp_*, bearer …, emails,

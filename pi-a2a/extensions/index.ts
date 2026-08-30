@@ -142,8 +142,14 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       }
     };
     signal.addEventListener("abort", onAbort, { once: true });
+    // Whether the turn finished on its own before any abort fired, captured
+    // the instant the race settles: an abort landing during the cleanup below
+    // (the server clears its reply-window timer only after this runner
+    // returns) must not retroactively fail a turn that already completed.
+    let completedCleanly = false;
     try {
       await Promise.race([session.prompt(message), done]);
+      completedCleanly = !signal.aborted;
     } finally {
       signal.removeEventListener("abort", onAbort);
       unsub();
@@ -162,6 +168,17 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       } catch {
         /* ignore */
       }
+    }
+    if (!completedCleanly) {
+      // The reply window expired (or the caller canceled) mid-run: the race
+      // ended because of the abort, not because the turn finished, so `reply`
+      // holds at most a truncated partial answer. Throw so messageSend maps
+      // the task to FAILED/CANCELED — returning normally takes the success
+      // path and hands the dispatcher a truncated reply labelled COMPLETED,
+      // indistinguishable from a finished worker (#247).
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("inbound session aborted before completing");
     }
     return { reply: reply || "(no reply)", inputRequired };
   };

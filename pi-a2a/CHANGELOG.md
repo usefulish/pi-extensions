@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.7.2 (2026-08-30)
+
+### Fixed
+
+- **A reply-window timeout is no longer reported as SUCCESS.** When the
+  inbound reply window expired, the session runner aborted the child session
+  but still resolved normally, so `message/send` took the success path and
+  returned `TASK_STATE_COMPLETED` with a truncated reply artifact — a killed
+  worker and a finished one were indistinguishable at the protocol level. The
+  runner now throws when the abort fired before the turn completed (captured
+  at race settlement, so an abort landing during cleanup does not fail a
+  completed turn), and `messageSend` independently routes any post-abort
+  normal return through the failure classification: `TASK_STATE_FAILED` for a
+  reply-window timeout (with a descriptive status message), `TASK_STATE_CANCELED`
+  for user cancellation. `TASK_STATE_COMPLETED` is reserved for turns that
+  actually finished, and a canceled task's state is no longer clobbered back
+  to COMPLETED by a runner that returns normally on abort.
+
 ## 0.7.1 (2026-08-29)
 
 ### Added
