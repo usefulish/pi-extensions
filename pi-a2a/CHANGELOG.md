@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.3 (2026-08-30)
+
+### Added
+
+- **Dispatched child sessions now persist their transcripts.** Stock
+  pi-a2a ran inbound-task children on `SessionManager.inMemory`, so a
+  dispatched worker that stalled or was killed mid-run left no step history
+  at all — its final A2A reply was the only evidence. The session runner now
+  creates a real `SessionManager` per dispatch, keyed by the A2A task id,
+  writing a full pi session file to `<agentDir>/a2a_sessions/<timestamp>_<taskId>.jsonl`
+  synchronously as the child runs (openable with pi's own session tooling,
+  complete up to the moment of death even on a reply-window kill). The file
+  materializes on the child's first assistant output; a child that dies
+  before any model output leaves no transcript (covered instead by the
+  FAILED task + audit line). The completion/failure audit lines now record
+  the transcript path plus an observed step count (assistant turns + tool
+  executions), so post-mortems can go from audit log or task id straight to
+  the step history. Privacy: transcripts carry everything the worker read —
+  files are `chmod 600` at turn end and bounded by retention; set
+  `a2a.server.childTranscripts: false` for stock in-memory behavior. The
+  host session lineage is preserved via the session header's `parentSession`
+  and an `a2a/dispatch` attribution entry in the file.
+
 ## 0.7.2 (2026-08-30)
 
 ### Fixed

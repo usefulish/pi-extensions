@@ -1019,6 +1019,123 @@ describe("server", () => {
     });
   });
 
+  describe("child transcripts (#252)", () => {
+    it("passes the A2A taskId to the runner", async () => {
+      let seenTaskId: string | undefined;
+      const runner: SessionRunner = async ({ taskId }) => {
+        seenTaskId = taskId;
+        return { reply: "ok", inputRequired: false };
+      };
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(r.result.status.state, STATE_COMPLETED);
+        assert.equal(seenTaskId, r.result.id, "runner receives the task's own A2A id");
+        assert.match(seenTaskId ?? "", /^task-/);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("audits the transcript path + step count on completion", async () => {
+      const piDir = tmpDir();
+      const runner: SessionRunner = async () => ({
+        reply: "done",
+        inputRequired: false,
+        transcriptPath: "/tmp/a2a_sessions/20260830T000000_task-abc.jsonl",
+        stepCount: 7,
+      });
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner, piDir });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(r.result.status.state, STATE_COMPLETED);
+        const lines = fs
+          .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l));
+        const tp = lines.find((l) => l.transcript);
+        assert.ok(tp, "a transcript audit line exists");
+        assert.equal(tp.taskId, r.result.id);
+        assert.equal(tp.transcript, "/tmp/a2a_sessions/20260830T000000_task-abc.jsonl");
+        assert.match(tp.preview, /7 steps/);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("audits the transcript path when the runner throws (killed worker)", async () => {
+      const piDir = tmpDir();
+      const runner: SessionRunner = async () => {
+        const err = new Error("reply timeout: exceeded the 1800s reply window");
+        (err as any).transcriptPath = "/tmp/a2a_sessions/20260830T000000_task-def.jsonl";
+        (err as any).stepCount = 42;
+        throw err;
+      };
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner, piDir });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(r.result.status.state, STATE_FAILED);
+        const lines = fs
+          .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l));
+        const tp = lines.find((l) => l.transcript);
+        assert.ok(tp, "a transcript audit line exists for the failure");
+        assert.match(tp.preview, /42 steps/);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("carries the transcript on the error when an aborted runner returns normally", async () => {
+      // The #247 defense-in-depth path: the runner resolves normally on
+      // abort, and messageSend must reclassify as FAILED — carrying the
+      // transcript forensics onto the classification error.
+      const piDir = tmpDir();
+      const partialRunner: SessionRunner = ({ signal }) =>
+        new Promise((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              resolve({
+                reply: "partial",
+                inputRequired: false,
+                transcriptPath: "/tmp/a2a_sessions/20260830T000000_task-ghi.jsonl",
+                stepCount: 3,
+              }),
+            { once: true },
+          );
+        });
+      const cfg = DEFAULTS();
+      cfg.server.replyTimeoutSec = 1;
+      const { url, stop } = await startServer({ cfg, runner: partialRunner, piDir });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        assert.equal(r.result.status.state, STATE_FAILED);
+        const lines = fs
+          .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l));
+        const tp = lines.find((l) => l.transcript);
+        assert.ok(tp, "transcript audited despite the post-abort normal return");
+        assert.match(tp.preview, /3 steps/);
+      } finally {
+        await stop();
+      }
+    });
+  });
+
   describe("port fallback (EADDRINUSE → next port)", () => {
     /** Pre-bind the configured port so the A2A server must fall back. */
     async function holdPort(port: number): Promise<() => Promise<void>> {
