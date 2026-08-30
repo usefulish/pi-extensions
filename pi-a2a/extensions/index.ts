@@ -165,6 +165,11 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       }
     };
     signal.addEventListener("abort", onAbort, { once: true });
+    // Whether the turn finished on its own before any abort fired, captured
+    // the instant the race settles: an abort landing during the cleanup below
+    // (the server clears its reply-window timer only after this runner
+    // returns) must not retroactively fail a turn that already completed.
+    let completedCleanly = false;
     try {
       // Settle the race on prompt() completion, not on agent_end: agent_end
       // fires when the model turn ends — BEFORE the post-run overflow
@@ -177,6 +182,7 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       // turns finish; aborts still settle the race immediately via onAbort
       // above.
       await Promise.race([session.prompt(message), done]);
+      completedCleanly = !signal.aborted;
     } finally {
       signal.removeEventListener("abort", onAbort);
       unsub();
@@ -196,6 +202,18 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
         /* ignore */
       }
     }
+    if (!completedCleanly) {
+      // The reply window expired (or the caller canceled) mid-run: the race
+      // ended because of the abort, not because the turn finished, so `reply`
+      // holds at most a truncated partial answer. Throw so messageSend maps
+      // the task to FAILED/CANCELED — returning normally takes the success
+      // path and hands the dispatcher a truncated reply labelled COMPLETED,
+      // indistinguishable from a finished worker (#247).
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("inbound session aborted before completing");
+    }
+
     if (terminalStopReason === "length" && !terminalHadText) {
       // A length stop with no assistant text means the provider capped
       // output before any usable content — typically max_tokens clamped

@@ -1167,6 +1167,64 @@ describe("server", () => {
     });
   });
 
+  describe("aborted runner returning normally is not COMPLETED (#247)", () => {
+    // The stock session runner resolves its prompt promise on session.abort()
+    // (instead of rejecting) and used to return the truncated reply normally,
+    // which took messageSend's success path: a reply-window kill came back
+    // TASK_STATE_COMPLETED with a partial artifact — indistinguishable from
+    // a finished worker. The server must classify by the abort signal, not
+    // by how the runner happened to return.
+    const partialRunner: SessionRunner = ({ signal }) =>
+      new Promise((resolve) => {
+        // Mimics the stock runner: abort resolves it normally with whatever
+        // partial reply was captured so far.
+        signal.addEventListener(
+          "abort",
+          () => resolve({ reply: "partial work before the window closed", inputRequired: false }),
+          { once: true },
+        );
+      });
+
+    it("maps a reply-window timeout to STATE_FAILED with a timeout status message", async () => {
+      const cfg = DEFAULTS();
+      cfg.server.replyTimeoutSec = 1;
+      const events: any[] = [];
+      const { url, stop } = await startServer({ cfg, runner: partialRunner, onActivity: (a) => events.push(a) });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        assert.equal(r.result.status.state, STATE_FAILED);
+        const msgText = r.result.status.message?.parts?.[0]?.text ?? "";
+        assert.include(msgText, "reply timeout", "status message names the timeout");
+        assert.isUndefined(r.result.artifacts, "an aborted task carries no reply artifact");
+        // The host toast must say failed — not "completed (Ns)".
+        assert.deepEqual(events.map((e) => e.type), ["arrived", "failed"]);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("preserves STATE_CANCELED when a canceled runner returns normally", async () => {
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: partialRunner });
+      try {
+        const sendP = jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        // Let the task start, then cancel it.
+        await new Promise((r) => setTimeout(r, 50));
+        const tasks = await jsonRpc(url, "tasks/list", {});
+        const tid = tasks.result.tasks[0]!.id;
+        await jsonRpc(url, "tasks/cancel", { id: tid });
+        const send = await sendP;
+        // The success path used to clobber the cancel handler's CANCELED.
+        assert.equal(send.result.status.state, STATE_CANCELED);
+      } finally {
+        await stop();
+      }
+    });
+  });
+
   describe("port fallback (EADDRINUSE → next port)", () => {
     /** Pre-bind the configured port so the A2A server must fall back. */
     async function holdPort(port: number): Promise<() => Promise<void>> {
