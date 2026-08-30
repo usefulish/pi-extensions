@@ -20,14 +20,14 @@ import { withRetry } from "./lib/retry";
 
 // Shared schemas
 const projectParam = Type.Optional(
-  Type.String({ description: "Leave empty — defaults to $MUNIN_PROJECT. Do not set unless you need a different project.", default: "" }),
+  Type.String({ description: "Leave empty — defaults to $MUNIN_PROJECT.", default: "" }),
 );
 const apiKeyParam = Type.Optional(
   Type.String({ description: "API key. Default: $MUNIN_API_KEY.", default: "" }),
 );
 const baseUrlParam = Type.Optional(
   Type.String({
-    description: "Base URL. Default: $MUNIN_BASE_URL or https://munin.kalera.ai",
+    description: "Base URL. Default: $MUNIN_BASE_URL.",
     default: "",
   }),
 );
@@ -305,26 +305,18 @@ export default function muninExtension(pi: ExtensionAPI) {
     description:
       "AT SESSION END (or after fix): STORE verified durable knowledge.",
     promptSnippet: "Store durable knowledge in long-term memory",
-    promptGuidelines: [
-      "Use munin_store at the end of a session for future sessions.",
-      "Give munin_store one type:(decision|bug-fix|fact|dependency) tag and one domain:(auth|frontend|backend|infra|memory) tag.",
-      "Include a conclusion, why it matters, evidence, and anchors in munin_store content.",
-      "Never use munin_store for secrets, credentials, raw logs, or TODOs.",
-    ],
+    promptGuidelines: ["munin_store: follow the Munin Memory Protocol for tags, content shape, and exclusions (no secrets, logs, TODOs)."],
     parameters: Type.Object({
       ...controlSchema,
       key: Type.String({
-        description:
-          "Unique key. Use kebab-case: domain/subject (e.g., auth/refresh-token-fix).",
+        description: "Unique kebab-case key: domain/subject.",
       }),
       title: Type.String({ description: "Short title." }),
       content: Type.String({
-        description:
-          "Body with conclusion, why it matters, evidence, anchors.",
+        description: "Conclusion, why it matters, evidence, anchors.",
       }),
       tags: Type.String({
-        description:
-          "Tags, comma-separated. Requires one type: + one domain:.",
+        description: "Comma-separated; one type: + one domain:.",
       }),
       valid_from: Type.Optional(
         Type.String({ description: "Valid-from ISO date." }),

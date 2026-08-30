@@ -40,7 +40,7 @@ describe("pi-web before_agent_start routing guidance", () => {
     const result = await callHook(handlers, ["read", "web_search"]);
     expect(result.systemPrompt).to.include("BASE");
     expect(result.systemPrompt).to.include("Web Tool Routing (pi-web)");
-    expect(result.systemPrompt).to.include("Firecrawl Search has poor semantic accuracy");
+    expect(result.systemPrompt).to.include("Firecrawl Search is weak on domain-specific queries");
   });
 
   it("does not inject when no web_* tool is active", async () => {
