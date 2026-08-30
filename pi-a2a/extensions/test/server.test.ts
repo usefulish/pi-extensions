@@ -1169,6 +1169,51 @@ describe("server", () => {
     });
   });
 
+  describe("reply-window timer teardown (#257)", () => {
+    it("clears the reply-window watchdog when the runner throws — no leaked 300s timer", async () => {
+      // Regression (#257): a throwing runner skips the success-path
+      // clearTimeout and never aborts the controller, so the 5-minute
+      // reply-window timer stayed armed after the task reported FAILED —
+      // the task was dead but the timer kept the process's event loop alive
+      // for the full window (the test-suite exit-hang). Every exit path must
+      // clear it.
+      const cfg = DEFAULTS(); // replyTimeoutSec: 300 → watchdog delay 300000ms
+      const windowMs = cfg.server.replyTimeoutSec * 1000;
+      const runner: SessionRunner = async () => {
+        throw new Error("boom");
+      };
+      const { url, stop } = await startServer({ cfg, runner });
+      const origSetTimeout = globalThis.setTimeout;
+      const origClearTimeout = globalThis.clearTimeout;
+      let created = 0;
+      const armed = new Set<ReturnType<typeof setTimeout>>();
+      try {
+        (globalThis as any).setTimeout = (fn: any, delay?: number, ...args: any[]) => {
+          const t = origSetTimeout(fn, delay, ...args);
+          if (delay === windowMs) {
+            created += 1;
+            armed.add(t);
+          }
+          return t;
+        };
+        (globalThis as any).clearTimeout = (t: ReturnType<typeof setTimeout>) => {
+          armed.delete(t);
+          return origClearTimeout(t);
+        };
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(r.result.status.state, STATE_FAILED);
+      } finally {
+        (globalThis as any).setTimeout = origSetTimeout;
+        (globalThis as any).clearTimeout = origClearTimeout;
+        await stop();
+      }
+      assert.equal(created, 1, "the reply-window watchdog must be created for the task");
+      assert.equal(armed.size, 0, "reply-window timer must be cleared when the runner throws");
+    });
+  });
+
   describe("aborted runner returning normally is not COMPLETED (#247)", () => {
     // The stock session runner resolves its prompt promise on session.abort()
     // (instead of rejecting) and used to return the truncated reply normally,

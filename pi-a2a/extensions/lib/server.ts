@@ -935,9 +935,15 @@ export class A2AServer {
 
     this.running += 1;
     const startedAt = Date.now();
+    // Reply-window watchdog. Cleared in the finally below on EVERY exit path:
+    // a runner that throws skips any inline clearTimeout and never aborts the
+    // controller, so without this the timer stayed armed for the full reply
+    // window (default 300s) — the task reported FAILED while the timer kept
+    // the event loop alive (test-suite exit-hang, fleet task #257).
+    let replyTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeoutMs = this.cfg.server.replyTimeoutSec * 1000;
-      const timer = setTimeout(
+      replyTimer = setTimeout(
         () =>
           controller.abort(
             new Error(
@@ -946,7 +952,7 @@ export class A2AServer {
           ),
         timeoutMs,
       );
-      controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+      controller.signal.addEventListener("abort", () => clearTimeout(replyTimer), { once: true });
       const wrapped = wrapInbound(identity, inboundText);
       const runner = this.requireRunner();
       const out = await runner({
@@ -955,7 +961,6 @@ export class A2AServer {
         signal: controller.signal,
         onProgress: (line) => this.onActivity?.({ type: "progress", taskId, line }),
       });
-      clearTimeout(timer);
       if (controller.signal.aborted) {
         // Defense in depth (#247): a runner may return normally even though
         // its abort signal fired — the stock runner's prompt promise resolves
@@ -1037,6 +1042,7 @@ export class A2AServer {
       }
       return st.task;
     } finally {
+      if (replyTimer !== undefined) clearTimeout(replyTimer);
       this.running -= 1;
     }
   }
