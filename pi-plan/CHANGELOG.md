@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.11.3 (2026-08-30)
+
+### Fixes
+
+- Plan-mode bash gate no longer false-blocks read-only commands (analysis of
+  449 live hard-blocks across 222 plan-mode sessions):
+  - stderr discards (`2>/dev/null`, `2>>/dev/null`) and fd duplicates
+    (`2>&1`, `2>&-`, `1>&2`, `>&2`) are read-safe and auto-allowed; real
+    redirects (`> file`, `2> err.log`, `< in`, and lookalike targets like
+    `>/dev/null2`) stay hard-blocked.
+  - `git -C <path> <read-subcommand>` (quoted paths like `-C "my repo"`,
+    `-c k=v`, `--no-pager`) now classifies as read — `git -C repo status` was
+    blocked 35 times. Mutating subcommands after any prefix still block
+    (`git -C "my repo" push`).
+  - `command -v x` / `command -V x`, `type x`, `which x` are reads. Bare
+    `command` stays a writer wrapper — `command NAME` executes NAME
+    (`command rm x` hard-blocks; reviewer-found bypass, fixed before publish).
+- `write_plan`: `title` is now optional — derived from the first `# Heading`
+  in `content` (falls back to `"Plan"`). Fixes 3 live validation failures where
+  models sent only `content`.
+
 ## 0.11.2 (2026-08-29)
 
 ### Added

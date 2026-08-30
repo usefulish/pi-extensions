@@ -118,7 +118,7 @@ interface PlanPreferences {
 }
 
 interface WritePlanParams {
-  title: string;
+  title?: string;
   content: string;
   status?: PlanStatus;
 }
@@ -153,10 +153,15 @@ function slugify(value: string): string {
 }
 
 function normalizePlanContent(params: WritePlanParams): string {
-  const title = params.title.trim() || "Plan";
+  const title = params.title?.trim() || "Plan";
   const body = params.content.trim();
   if (/^#\s+/m.test(body)) return `${body}\n`;
   return `# ${title}\n\n${body}\n`;
+}
+
+/** First '# Heading' in the content — lets write_plan tolerate a missing title arg. */
+function deriveTitle(content: string): string | undefined {
+  return content.match(/^#\s+(.+)$/m)?.[1]?.trim() || undefined;
 }
 
 function planPath(cwd: string, title: string, dir: string = DEFAULT_PLAN_DIR): string {
@@ -277,13 +282,18 @@ function splitShellSegments(cmd: string): string[] {
 // Read-only git subcommands auto-allowed in plan mode. Anything not matched here
 // falls through to "write" (hard-blocked) in classifySegment — the conservative
 // default. Ambiguous forms (e.g. `git config` without --get/--list) are NOT here.
+// All forms tolerate global opts: -C with quoted paths (`-C "my repo"`), -c k=v
+// (quoted values), and --no-pager — from session analysis: `git -C repo status`
+// was hard-blocked (35 sessions). The quoting alternatives only match quoted
+// tokens, so they cannot swallow a mutating subcommand.
 // ponytail: one allowlist, conservative fallthrough; when unsure, omit → block.
-const GIT_READ_ONLY = /^git\s+(?:status|rev-parse|diff|show|log|ls-files|ls-tree|ls-remote|cat-file|rev-list|shortlog|describe|for-each-ref|show-ref|symbolic-ref|name-rev|blame|annotate)\b/i;
-const GIT_BRANCH_READ_ONLY = /^git\s+branch\s+(?:-[va]+|--(?:list|all|remote|merged|no-merged|contains|show-current))\b/i;
-const GIT_TAG_READ_ONLY = /^git\s+tag\s+(?:--list\b|-\w*l\b)/i;
-const GIT_REMOTE_READ_ONLY = /^git\s+remote(?:\s+(?:-[va]+|show\b|get-url\b)[^\n]*)?$/i;
-const GIT_CONFIG_READ_ONLY = /^git\s+config\s+(?:--(?:get|get-regexp|get-all|list)|-l)\b/i;
-const GIT_REFLOG_READ_ONLY = /^git\s+reflog(?:\s+show\b.*)?$/i;
+const GIT_PREFIX = "^git\\s+(?:-C\\s+(?:\"[^\"]*\"|'[^']*'|\\S+)\\s+|-c\\s+\\S+=(?:\"[^\"]*\"|\\S+)\\s+|--no-pager\\s+)*";
+const GIT_READ_ONLY = new RegExp(`${GIT_PREFIX}(?:status|rev-parse|diff|show|log|ls-files|ls-tree|ls-remote|cat-file|rev-list|shortlog|describe|for-each-ref|show-ref|symbolic-ref|name-rev|blame|annotate)\\b`, "i");
+const GIT_BRANCH_READ_ONLY = new RegExp(`${GIT_PREFIX}branch\\s+(?:-[va]+|--(?:list|all|remote|merged|no-merged|contains|show-current))\\b`, "i");
+const GIT_TAG_READ_ONLY = new RegExp(`${GIT_PREFIX}tag\\s+(?:--list\\b|-\\w*l\\b)`, "i");
+const GIT_REMOTE_READ_ONLY = new RegExp(`${GIT_PREFIX}remote(?:\\s+(?:-[va]+|show\\b|get-url\\b)[^\\n]*)?$`, "i");
+const GIT_CONFIG_READ_ONLY = new RegExp(`${GIT_PREFIX}config\\s+(?:--(?:get|get-regexp|get-all|list)|-l)\\b`, "i");
+const GIT_REFLOG_READ_ONLY = new RegExp(`${GIT_PREFIX}reflog(?:\\s+show\\b.*)?$`, "i");
 
 function isGitReadOnly(inspection: string): boolean {
   return GIT_READ_ONLY.test(inspection)
@@ -349,16 +359,20 @@ function extractSubagentNames(input: unknown): string[] {
 function classifyCommand(cmd: string): CommandDisposition {
   const c = cmd.trim();
   if (!c) return "confirm";
-  // Redirects, command substitution, and heredocs can create/modify files or run
-  // arbitrary code regardless of the surrounding command — always a write.
-  // Note: the < > check is intentionally conservative — it also catches "a < b"
-  // inside quotes. Acceptable: rare in read-only greps, and safety wins.
-  if (/[\r\n<>]/.test(c) || /\$\(|`/.test(c) || /--output(?:=|\s)/i.test(c)) return "write";
+  // Redirections (stdout/stderr to files, here-docs) can create/modify files.
+  // Discarding forms are read-safe: n>/dev/null and append n>>/dev/null (exact
+  // null-device target, anchored so >/dev/null2 keeps its `>` → stays write)
+  // and fd dups/close (2>&1, 2>&-). Top false-block from session analysis:
+  // `find … 2>/dev/null | head`. Command substitution and heredocs are always writes.
+  // ponytail: < input redirect stays conservative (blocked) — rare in practice.
+  const cNoDiscard = c.replace(/\d*>+\s*\/dev\/null(?![\w.\/-])|\d*>&[\d-]/g, "");
+  if (/[\r\n<>]/.test(cNoDiscard) || /\$\(|`/.test(c) || /--output(?:=|\s)/i.test(c)) return "write";
   // Split on command separators OUTSIDE quotes so read-only pipelines (grep ... | head)
   // and chains (ls -la; echo done) classify per segment, while quoted alternation
   // patterns like "sqi_manager_task\|SYS_Tasks" stay one segment. The whole command
   // is read only if EVERY segment is read only; any known writer wins; else confirm.
-  const segments = splitShellSegments(c);
+  // Split the stripped string so `2>&1` isn't cut at its bare `&`.
+  const segments = splitShellSegments(cNoDiscard);
   if (segments.length > 1) {
     if (segments.some((seg) => classifySegment(seg) === "write")) return "write";
     if (segments.every((seg) => classifySegment(seg) === "read")) return "read";
@@ -370,9 +384,13 @@ function classifyCommand(cmd: string): CommandDisposition {
 function classifySegment(seg: string): CommandDisposition {
   const inspection = seg.replace(/^\S*\/(?=[^/\s]+(?:\s|$))/, "");
   if (/^git\s+/i.test(inspection)) {
-    return isGitReadOnly(inspection) ? (inspection === seg ? "read" : "confirm") : "write";
+    return isGitReadOnly(inspection) ? "read" : "write";
   }
-  if (/^(?:(?:rm|rmdir|mv|cp|mkdir|touch|chmod|chown|ln|install|truncate|dd|mktemp)|sudo|env|command|time|nohup)\b/i.test(inspection)) return "write";
+  // command/type/which: only pure executable lookups are reads. POSIX `command NAME`
+  // EXECUTES NAME, so bare `command` stays a writer wrapper (`command rm x` must block);
+  // only `command -v/-V` is a lookup (reviewer critical finding, 0.11.3).
+  if (/^(?:type|which)\b/i.test(inspection) || /^command\s+-[vV]\b/i.test(inspection)) return "read";
+  if (/^(?:(?:rm|rmdir|mv|cp|mkdir|touch|chmod|chown|ln|install|truncate|dd|mktemp|command)|sudo|env|nohup|time)\b/i.test(inspection)) return "write";
   if (/^sed\b/i.test(inspection) && (/\s(?:-i\S*|--in-place(?:=\S*)?)(?:\s|$)/i.test(inspection) || /\b(?:\d+)?w\s+/i.test(inspection) || /\/w\s/i.test(inspection))) return "write";
   if (/^tee\b/i.test(inspection)) return "write";
   if (/^find\b/i.test(inspection) && /-(?:delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)\b/i.test(inspection)) return "write";
@@ -1243,9 +1261,11 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       `Don't call ${PLAN_TOOL} while blocking questions remain; use ${ASK_USER_QUESTION_TOOL} first.`,
     ],
     parameters: Type.Object({
-      title: Type.String({
-        description: "Short plan title",
-      }),
+      title: Type.Optional(
+        Type.String({
+          description: "Short plan title. Optional: derived from the first '# Heading' in content when omitted.",
+        }),
+      ),
       content: Type.String({
         description: "Markdown plan content",
       }),
@@ -1262,13 +1282,15 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       try {
       // ponytail: write_plan is available in normal mode too — agent updates plans during execution
       const typedParams = params as WritePlanParams;
+      // Title is optional: fall back to the first '# Heading' in content, then "Plan".
+      const title = typedParams.title?.trim() || deriveTitle(typedParams.content) || "Plan";
 
       // ponytail: reuse draft path for refinements, new path for new plans
       let destination: string;
       if (
         lastPlanPath &&
         lastPlanStatus === "draft" &&
-        typedParams.title.trim() === lastPlanTitle
+        title === lastPlanTitle
       ) {
         // ponytail: compare relative to resolved plan dir (portable, rejects siblings)
         const resolved = path.resolve(ctx.cwd, lastPlanPath);
@@ -1279,7 +1301,7 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
       } else {
         destination = planPath(
           ctx.cwd,
-          typedParams.title,
+          title,
           plansDir,
         );
       }
@@ -1299,8 +1321,7 @@ export default function piPlanExtension(pi: ExtensionAPI): void {
         },
       );
       lastPlanPath = destination;
-      lastPlanTitle =
-        typedParams.title.trim() || "Plan";
+      lastPlanTitle = title;
       lastPlanStatus = isPlanStatus(typedParams.status)
         ? typedParams.status
         : "draft";

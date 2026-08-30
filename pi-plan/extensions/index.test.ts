@@ -1235,6 +1235,15 @@ describe("tool gating in plan mode", () => {
     ["writer in pipeline", "cat file.txt | tee out.txt"],
     ["writer in chain", "ls -la; cp a b"],
     ["mixed chain with redirect", "grep foo src | head > out.txt"],
+    ["fd-dup with extra redirect", "grep foo src 2>&1 > out.txt"],
+    ["stderr to file", "grep foo src 2> err.log"],
+    ["stdin redirect", "grep foo < input.txt"],
+    ["command wrapper runs a writer", "command rm -rf src/"],
+    ["command -p wrapper", "command -p bash -c 'touch x'"],
+    ["redirect to /dev/null-prefixed file", "grep -n x src/*.ts >/dev/null2 && echo done"],
+    ["append stderr to file", "sort data 2>>err.log"],
+    ["quoted string with redirect-ish text plus real redirect", "echo 'use 2>&1 here' > real.txt"],
+    ["git -C quoted path push", "git -C \"my repo\" push origin main"],
     ["command substitution", "echo $(touch marker)"],
     ["command substitution in pipeline", "grep foo src | echo $(touch marker)"],
     ["awk print redirect", "awk '{print $1 > \"out.txt\"}' file"],
@@ -1273,7 +1282,13 @@ describe("tool gating in plan mode", () => {
     const tc = handlers.tool_call?.[0];
     assert.ok(tc);
 
-    for (const cmd of ["ls -la", "grep -R foo src/", "find . -name '*.ts'", "git status --short", "cat index.ts", "/bin/ls -la", "/usr/bin/grep foo src/", "sort -n input.txt", "git blame file.ts", "git log --oneline -5", "git ls-tree HEAD", "git cat-file -p HEAD:file.ts", "git remote -v", "git remote show origin", "git config --get user.email", "git config --list", "git describe --tags", "git tag -l", "git tag --list", "git for-each-ref", "git rev-list --count HEAD", "git shortlog -sne", "git branch -v", "git branch -vv", "git reflog", "git reflog show", "git ls-files", "git ls-remote", "git name-rev HEAD", "git show-ref", "git symbolic-ref HEAD"]) {
+    for (const cmd of ["ls -la", "grep -R foo src/", "find . -name '*.ts'", "git status --short", "cat index.ts", "/bin/ls -la", "/usr/bin/grep foo src/", "sort -n input.txt", "git blame file.ts", "git log --oneline -5", "git ls-tree HEAD", "git cat-file -p HEAD:file.ts", "git remote -v", "git remote show origin", "git config --get user.email", "git config --list", "git describe --tags", "git tag -l", "git tag --list", "git for-each-ref", "git rev-list --count HEAD", "git shortlog -sne", "git branch -v", "git branch -vv", "git reflog", "git reflog show", "git ls-files", "git ls-remote", "git name-rev HEAD", "git show-ref", "git symbolic-ref HEAD",
+      // regression: falsely blocked in live sessions (2026-08 analysis)
+      "git -C /Volumes/Dev/agents/pi-extensions status --short", "git -C repo log --oneline -8", "git -C repo remote get-url origin", "git -c color.ui=always diff", "find . -name '*.ts' 2>/dev/null | head -20", "grep -rn foo src/ 2>&1 | head -10", "ls /tmp 2>/dev/null", "command -v pi", "command -V pi", "which pi", "type node",
+      // regression: chained git + fd-dup across separators (segment split must use the stripped string)
+      "git ls-remote origin 2>&1 | head -20; git remote -v", "git remote -v && git ls-remote origin 2>&1 | head -20", "ls .agents/plans/ 2>/dev/null; git log --oneline -3; grep -n 'X' src/a.rs | head -4",
+      // regression: reviewer findings (0.11.3) — anchored null target, append-to-null, quoted -C, --no-pager, fd dups
+      "grep foo src 2>>/dev/null", "git -C \"my repo\" status", "git --no-pager diff", "echo err 1>&2", "grep x f >&2", "cat f 2>&-"]) {
       assert.equal(await tc({ toolName: "bash", input: { command: cmd } }, ctx), undefined, `${cmd} auto-allowed`);
     }
     assert.equal(confirmations, 0);
@@ -1742,6 +1757,25 @@ describe("write_plan lifecycle", () => {
     // ponytail: write_plan is available in any mode
     const result = await wd.execute("c1", { title: "Test", content: "# Test" }, undefined, undefined, fakeCtx());
     assert.ok(result);
+  });
+
+  it("derives title from first '# Heading' when title arg omitted (regression: validation failures in live sessions)", async () => {
+    const { toolDefs } = createFakePi(["read"], {});
+    const wd = toolDefs.write_plan;
+    assert.ok(wd);
+    const ctx = fakeCtx({ cwd: TMP });
+
+    // No title arg — model sent only content (3 live failures: 2026-07-12, 2026-08-29)
+    const result = await wd.execute("c1", { content: "# Pi 0.84.4 compat\n## Goal\nCheck all packages." }, undefined, undefined, ctx);
+    assert.ok(result);
+    assert.equal(result.details?.title, "Pi 0.84.4 compat");
+    const written = readFileSync(result.details?.path, "utf8");
+    assert.match(written, /^# Pi 0.84.4 compat/);
+
+    // Neither title nor heading — falls back to "Plan"
+    const r2 = await wd.execute("c2", { content: "Just some notes without a heading." }, undefined, undefined, ctx);
+    assert.ok(r2);
+    assert.equal(r2.details?.title, "Plan");
   });
 
   it("directs approval to /plan-approve, not to ask_user_question options", async () => {
