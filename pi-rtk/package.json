@@ -1,6 +1,6 @@
 {
   "name": "@bacnh85/pi-rtk",
-  "version": "0.1.13",
+  "version": "0.2.0",
   "description": "Pi extension that routes shell commands through RTK for token savings.",
   "license": "MIT",
   "publishConfig": {
@@ -26,8 +26,12 @@
     "CHANGELOG.md",
     "extensions/index.ts",
     "extensions/findFallback.js",
+    "extensions/version-gate.js",
     "extensions/package.json"
   ],
+  "scripts": {
+    "test": "node --test extensions/test/*.test.js"
+  },
   "pi": {
     "extensions": [
       "./extensions/index.ts"

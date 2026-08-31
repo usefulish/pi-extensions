@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0 (2026-08-31)
+
+### Changed
+
+- find-predicate blocklist is now version-gated: rtk ≥ 0.46 dispatches on find's
+  grammar and passes unmodeled predicates through to real find (never-worse
+  guard), so `-not/!/-or/-o/-and/-a/-newer/-perm/-size/-mtime/-mmin/-atime/
+  -amin/-ctime/-cmin/-empty/-link` and `(` `)` groups rewrite again (round-trip
+  verified against native find). rtk < 0.46 keeps the old strict blocklist.
+- Always rejected regardless of version: `-exec/-execdir/-delete/-print0/
+  -fprint0/-fprintf/-fprint/-regex/-iregex/-regextype` (mutating or consumer-
+  contract tokens where rtk's compact display is lossy).
+
+### Added
+
+- `npm test` script (`node --test`) — findFallback tests were present but never
+  run by CI's `npm pack --dry-run`.
+
+### Fixed
+
+- Version-gate helpers live in a new `version-gate.js` module instead of new
+  exports in `findFallback.js`: pi's jiti loader can pair a reloaded `index.ts`
+  with a stale cached copy of an existing module, which crashed at import
+  (`parseSemver is not a function`). New imports must target new files.
+
 ## 0.1.13 (2026-08-29)
 
 ### Added

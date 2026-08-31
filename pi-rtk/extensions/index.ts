@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createLocalBashOperations, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { hasUnsupportedRtkFind } from "./findFallback.js";
+import { parseSemver, supportsFindPassthrough } from "./version-gate.js";
 
 const REWRITE_TIMEOUT_MS = 2_000;
 const RTK_UNAVAILABLE_RETRY_MS = 30_000;
@@ -12,12 +13,7 @@ let sessionEnabled = true;
 let rtkUnavailableNotified = false;
 let rtkAvailable: boolean | undefined;
 let rtkLastCheckedAt = 0;
-
-function parseSemver(raw: string): [number, number, number] | null {
-  const match = raw.trim().match(/(\d+)\.(\d+)\.(\d+)/);
-  if (!match) return null;
-  return [Number.parseInt(match[1], 10), Number.parseInt(match[2], 10), Number.parseInt(match[3], 10)];
-}
+let rtkSupportsFindPassthrough = false;
 
 function isAtLeastVersion(current: [number, number, number], minimum: [number, number, number]): boolean {
   for (let i = 0; i < minimum.length; i += 1) {
@@ -57,6 +53,8 @@ async function getRtkVersion(pi: ExtensionAPI): Promise<string | null> {
 }
 
 async function checkRtkAvailable(pi: ExtensionAPI, ctx: ExtensionContext): Promise<boolean> {
+  // Conservatively reset on every check; only a verified >=0.46 binary re-enables it.
+  rtkSupportsFindPassthrough = false;
   const version = await getRtkVersion(pi);
   if (!version) {
     rtkAvailable = false;
@@ -73,6 +71,10 @@ async function checkRtkAvailable(pi: ExtensionAPI, ctx: ExtensionContext): Promi
     return false;
   }
 
+  // rtk 0.46 dispatches on find's grammar and passes unmodeled predicates
+  // through to real find (never-worse guard) — safe subset of find predicates
+  // no longer needs blocking there.
+  rtkSupportsFindPassthrough = !!parsedVersion && supportsFindPassthrough(version);
   rtkAvailable = true;
   rtkLastCheckedAt = Date.now();
   rtkUnavailableNotified = false;
@@ -111,7 +113,7 @@ async function rewriteCommand(pi: ExtensionAPI, command: string, signal?: AbortS
   if (result.code !== 0 && result.code !== 3) return null;
 
   const rewritten = result.stdout.trim();
-  if (hasUnsupportedRtkFind(rewritten)) return null;
+  if (hasUnsupportedRtkFind(rewritten, rtkSupportsFindPassthrough)) return null;
   return rewritten.length > 0 ? rewritten : null;
 }
 
