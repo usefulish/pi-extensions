@@ -399,6 +399,11 @@ it("issue #21: write/create/overwrite without content= or content_from= errors i
       expect(vaultNameForCwd(vault, { name: "vault-a", path: vault })).to.equal("vault-a");
       expect(vaultNameForCwd(vault, { name: "vault-b", path: outside })).to.equal(undefined);
       expect(guard({ toolName: "read", input: { path: "Note.md" } }, { cwd: vault })?.block).to.equal(true);
+      // Pin the block-reason text: the run= example must render with visible
+      // escapes (regression guard for the template-literal quoting bug).
+      const cwdBlockReason = guard({ toolName: "read", input: { path: "Note.md" } }, { cwd: vault })?.reason ?? "";
+      expect(cwdBlockReason).to.include('run="read file=\\"My Note\\""');
+      expect(cwdBlockReason).to.include('vault="<name>"');
       expect(guard({ toolName: "write", input: { path: "Note.md" } }, { cwd: vault })?.block).to.equal(true);
       expect(guard({ toolName: "edit", input: { path: "Note.md" } }, { cwd: vault })?.block).to.equal(true);
       expect(guard({ toolName: "ls", input: { path: "." } }, { cwd: vault })?.block).to.equal(true);

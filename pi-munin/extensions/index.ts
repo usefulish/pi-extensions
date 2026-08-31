@@ -287,8 +287,8 @@ export default function muninExtension(pi: ExtensionAPI) {
       key: Type.String({ description: "Key to retrieve." }),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const { key } = params as any;
-      validateMemoryKey(key);
+      const { key: rawKey } = params as any;
+      const key = validateMemoryKey(rawKey);
       const result = await withMuninClient(params, async (client, projectId) => {
         return callMunin(client, projectId, "get", { key });
       }, ctx);
@@ -332,8 +332,8 @@ export default function muninExtension(pi: ExtensionAPI) {
       ),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const { key, title, content, tags, valid_from, valid_to, pinned } = params as any;
-      validateMemoryKey(key);
+      const { key: rawKey, title, content, tags, valid_from, valid_to, pinned } = params as any;
+      const key = validateMemoryKey(rawKey);
       const tagValidation = validateMemoryTags(tags);
       if (!tagValidation.ok) throw new Error(tagValidation.message);
       const result = await withMuninClient(params, async (client, projectId) => {
@@ -425,8 +425,8 @@ export default function muninExtension(pi: ExtensionAPI) {
       key: Type.String({ description: "Key to delete." }),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const { key } = params as any;
-      validateMemoryKey(key);
+      const { key: rawKey } = params as any;
+      const key = validateMemoryKey(rawKey);
       const confirmed = await ctx.ui.confirm(
         "Delete Munin memory?",
         `Delete memory \`${key}\` from long-term storage? This cannot be undone.`,

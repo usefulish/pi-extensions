@@ -928,7 +928,7 @@ export default function piObsidianExtension(pi: ExtensionAPI) {
         || (event.toolName === "bash" && isVaultFilesystemBashCommand(input.command, ctx.cwd, cwdVault))) {
         return {
           block: true,
-          reason: `Obsidian vault detected at ${cwdVault}. Use obsidian with vault="<vault name>" for vault files; use explicit external paths for non-vault work.`,
+          reason: `Obsidian vault detected at ${cwdVault}. Use the obsidian tool instead — e.g. obsidian run="read file=\\"My Note\\"" (pass vault="<name>" if not the focused vault). Use explicit external paths for non-vault work.`,
         };
       }
       return;
@@ -957,7 +957,7 @@ export default function piObsidianExtension(pi: ExtensionAPI) {
           if (!containsVaultPath) continue;
           return {
             block: true,
-            reason: `Command targets Obsidian vault at ${root}. Use the obsidian tool with vault="<vault name>" instead.`,
+            reason: `Command targets Obsidian vault at ${root}. Use the obsidian tool instead — e.g. obsidian run="read file=\\"My Note\\"" (pass vault="<name>" if not the focused vault).`,
           };
         }
       }
@@ -970,7 +970,7 @@ export default function piObsidianExtension(pi: ExtensionAPI) {
           if (isPathInObsidianVault(targetPath, ctx.cwd, root)) {
             return {
               block: true,
-              reason: `Path targets Obsidian vault at ${root}. Use the obsidian tool with vault="<vault name>" instead.`,
+              reason: `Path targets Obsidian vault at ${root}. Use the obsidian tool instead — e.g. obsidian run="read file=\\"My Note\\"" (pass vault="<name>" if not the focused vault).`,
             };
           }
         }
@@ -984,7 +984,7 @@ export default function piObsidianExtension(pi: ExtensionAPI) {
           if (rel && !rel.startsWith(".." + sep) && !isAbsolute(rel)) {
             return {
               block: true,
-              reason: `CWD is a parent directory of vault at ${root}. Use the obsidian tool with vault="<vault name>" for vault files.`,
+              reason: `CWD is a parent directory of vault at ${root}. Use the obsidian tool instead — e.g. obsidian run="read file=\\"My Note\\"" (pass vault="<name>" if not the focused vault).`,
             };
           }
         }

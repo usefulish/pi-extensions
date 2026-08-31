@@ -119,7 +119,7 @@ async function readFileForRetry(filePath: string, cwd: string): Promise<string |
   }
 }
 
-function wrapToolDefinition(base: any, factory: (cwd: string) => any, shouldRepair: () => boolean, onRepair: (toolName: string, repairs: readonly RepairKind[]) => void): any {
+function wrapToolDefinition(base: any, factory: (cwd: string) => any, shouldRepair: () => boolean, onRepair: (toolName: string, repairs: readonly RepairKind[]) => void, editMismatchCounts?: Map<string, number>, activeToolNames?: () => readonly string[]): any {
   return {
     ...base,
     prepareArguments(args: unknown) {
@@ -144,8 +144,21 @@ function wrapToolDefinition(base: any, factory: (cwd: string) => any, shouldRepa
       if (isRecord(params)) delete params.__mtReadNote;
 
       if (base.name !== "edit") {
-        const result = await freshDef.execute(toolCallId, params, signal, onUpdate, ctx);
-        return base.name === "read" ? appendReadNote(result, readNote) : result;
+        try {
+          const result = await freshDef.execute(toolCallId, params, signal, onUpdate, ctx);
+          return base.name === "read" ? appendReadNote(result, readNote) : result;
+        } catch (err: any) {
+          // Session mining: "(no output) / Command exited with code 1" after a
+          // search reads as a crash, so models retry the same command. Annotate
+          // it as a no-match result — but only for search-like commands; for
+          // predicates (git diff --quiet, test -f, kill -0) exit 1 IS the answer.
+          const message: string = err?.message ? String(err.message) : "";
+          const command = typeof params?.command === "string" ? params.command : "";
+          if (base.name === "bash" && /\b(rg|grep|find|fd|ls|which|whereis|ag|ack)\b/.test(command) && /^\(no output\)\s*\n*\s*Command exited with code \d+/.test(message)) {
+            throw new Error(`${message}\n\nNote: no output with a non-zero exit usually means the search/lookup found no matches — change the pattern or tool instead of retrying the same command.`);
+          }
+          throw err;
+        }
       }
 
       // edit: try once; on a match-failure, retry once with trim-tolerant
@@ -153,10 +166,12 @@ function wrapToolDefinition(base: any, factory: (cwd: string) => any, shouldRepa
       // error that shows the nearest region.
       try {
         const result = await freshDef.execute(toolCallId, params, signal, onUpdate, ctx);
+        editMismatchCounts?.delete(resolvePath(cwd, typeof params?.path === "string" ? params.path : ""));
         return result;
-      } catch (err: any) {
-        const message: string = err?.message ? String(err.message) : "";
-        if (!isEditMismatchError(message)) throw err;
+      } catch (catchedErr: any) {
+        let err: any = catchedErr;
+        const initialMessage: string = err?.message ? String(err.message) : "";
+        if (!isEditMismatchError(initialMessage)) throw err;
 
         const filePath = typeof params?.path === "string" ? params.path : "";
         if (!filePath) throw err;
@@ -168,7 +183,7 @@ function wrapToolDefinition(base: any, factory: (cwd: string) => any, shouldRepa
           : (typeof params?.oldText === "string" ? [{ oldText: params.oldText, newText: params.newText }] : []);
         if (edits.length === 0) throw err;
 
-        const retry = computeRetryEdit(fileContent, edits, parseFailedEditIndex(message));
+        const retry = computeRetryEdit(fileContent, edits, parseFailedEditIndex(initialMessage));
         if (retry) {
           // Rebuild oldText from the file's real bytes (real indentation) so the
           // core exact matcher succeeds; keep the model's newText as-is.
@@ -176,16 +191,31 @@ function wrapToolDefinition(base: any, factory: (cwd: string) => any, shouldRepa
           if (Array.isArray(fixedParams.edits)) fixedParams.edits = retry.fixedEdits;
           else fixedParams.oldText = retry.fixedEdits[0].oldText;
           onRepair(base.name, ["trim-match-retry"]);
-          return await freshDef.execute(toolCallId, fixedParams, signal, onUpdate, ctx);
+          try {
+            return await freshDef.execute(toolCallId, fixedParams, signal, onUpdate, ctx);
+          } catch (retryErr: any) {
+            // A failed trim-retry is still a miss — fall through to the
+            // unresolvable path below so it counts toward escalation.
+            err = retryErr;
+          }
         }
 
         // Unresolvable: enrich the error with the nearest region so the model
         // can copy verbatim on the next turn. categorizeToolError checks
         // edit_mismatch before rate_limit/timeout for the edit tool, so a snippet
         // containing 'timeout'/'429' cannot misclassify this.
+        const message: string = err?.message ? String(err.message) : "";
         const failing = edits[Math.min(parseFailedEditIndex(message), edits.length - 1)];
         const nearest = failing ? nearestBlock(fileContent, stripReadContamination(failing.oldText).text) : "";
-        throw new Error(nearest ? `${message}\n\n${nearest}` : message);
+        // Session mining: 26% of mismatches fail again on retry (wrong content,
+        // not whitespace). Escalate to apply_patch after the second miss on the
+        // same file — different strategy beats a third exact-match attempt.
+        const misses = editMismatchCounts ? (editMismatchCounts.get(resolvePath(cwd, filePath)) ?? 0) + 1 : 1;
+        editMismatchCounts?.set(resolvePath(cwd, filePath), misses);
+        const escalate = misses >= 2 && (!activeToolNames || activeToolNames().includes("apply_patch"))
+          ? `\n\nedit has failed ${misses}× on this file. Switch to apply_patch with a small V4D diff (context + -/+ lines) — it does not require exact oldText.`
+          : "";
+        throw new Error(nearest ? `${message}\n\n${nearest}${escalate}` : `${message}${escalate}`);
       }
     },
   };
@@ -284,12 +314,16 @@ export default function (pi: ExtensionAPI) {
     // generally useful view/create/replace/insert editor in the full catalog).
     str_replace_editor: createStrReplaceEditorToolDefinition,
   };
+  // Session mining: per-file edit-mismatch counters — escalate to apply_patch
+  // after repeated unresolvable misses on the same file (26% retry-fail tail).
+  const editMismatchCounts = new Map<string, number>();
+  const activeToolsRef = () => pi.getActiveTools();
   for (const f of Object.values(toolFactories)) {
     const template = f(process.cwd());
     pi.registerTool(wrapToolDefinition(template, f, () => repairThisTurn, (toolName) => {
       repairCounts.set(toolName, (repairCounts.get(toolName) ?? 0) + 1);
       debugLog("repair:", toolName, repairCounts.get(toolName));
-    }));
+    }, editMismatchCounts, activeToolsRef));
   }
 
   // ── apply_patch: Codex-style diff/patch tool (robust for weak models) ──
@@ -396,6 +430,7 @@ export default function (pi: ExtensionAPI) {
   // ── session_start ──
   pi.on("session_start", (_event, ctx) => {
     sessionModel = ctx.model ? { id: ctx.model.id, provider: ctx.model.provider } : undefined;
+    editMismatchCounts.clear(); // per-session — misses from a prior session must not escalate
     // ds-anchor: reset and init from durable state (resume of a session that
     // already has an assistant reply = instantly promoted, no bootstrap).
     anchorReady = anchorTarget(ctx.model);
@@ -489,7 +524,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     activeFamily = family(ctx.model);
-    repairThisTurn = activeFamily !== null && repairEnabled();
+    // Session mining: schema-driven TypeBox repair is deterministic and safe for
+    // ALL models — only steering/guidance stays family-gated. gpt-5.6-* sessions
+    // had edit/munin/serena validation errors that repair would have fixed.
+    repairThisTurn = repairEnabled();
     remindedThisTurn = false;
 
     if (!activeFamily) { debugLog("guidance: skipped (no family detected)"); return; }
@@ -628,7 +666,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_execution_end", (event, ctx) => {
     if (!event.isError || !family(ctx.model)) return;
     hasErrorThisTurn = true;
-    const info = categorizeToolError(event.toolName, event.result);
+    const info = categorizeToolError(event.toolName, event.result, pi.getActiveTools());
     lastErrorInfo = info;
     recordError(event.toolName, info.category);
     logWarn(event.toolName, info.category);
