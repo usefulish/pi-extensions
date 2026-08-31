@@ -93,6 +93,20 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
         : {}),
     } as any);
     const session = created.session;
+    // Fire the extension session lifecycle for the child. createAgentSession
+    // loads extension packages but never emits session_start — the SDK's own
+    // print/rpc modes emit it via bindExtensions() right after creation — so
+    // without this the child runs every extension's factory but none of their
+    // session_start handlers: extensions that register tools there (e.g.
+    // pi-mcp-extension, which wires ALL of its MCP servers/tools on
+    // session_start) are silently missing from dispatched sessions. mode
+    // "print" with no uiContext keeps ctx.hasUI === false, matching how the
+    // host-only session_start guard below classifies child sessions.
+    try {
+      await session.bindExtensions({ mode: "print" });
+    } catch {
+      // Best-effort: a child that fails to bind still runs base tools.
+    }
     let reply = "";
     let inputRequired = false;
     let resolveDone!: () => void;
@@ -133,6 +147,16 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
     } finally {
       signal.removeEventListener("abort", onAbort);
       unsub();
+      // dispose() does NOT emit session_shutdown (it only invalidates the
+      // extension runner), so emit it explicitly first: extensions that
+      // started processes on session_start (pi-mcp-extension's stdio MCP
+      // servers) stop them on session_shutdown and would otherwise leak one
+      // process per inbound task.
+      try {
+        await session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+      } catch {
+        /* best-effort */
+      }
       try {
         session.dispose();
       } catch {
@@ -925,7 +949,15 @@ export default function a2aExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, ctx) => {
+    // Only the HOST session owns the inbound server. Child sessions share
+    // this cached extension factory (the loader caches it per process), so
+    // the session_shutdown makeSessionRunner now emits for each child would
+    // otherwise stop the host's shared `server` mid-dispatch. Same host-only
+    // classification as session_start above: children have hasUI=false and
+    // mode "print"; json-mode hosts are long-lived HOSTS, not children —
+    // they keep the shutdown.
+    if (!ctx.hasUI && ctx.mode !== "json") return;
     if (server) {
       try {
         await server.stop();
