@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.7 (2026-08-30)
+
+### Changed
+
+- Only nits defer during the post-steer cooldown; concerns now always steer
+  (wake the agent) even inside the cooldown window. A deferred concern
+  contradicted its own delivery template ("address this or state why it does
+  not apply") — the agent couldn't address what it wasn't woken for, and the
+  note just sat visible-but-unacted until the user's next prompt (session
+  01a051c6: 1h21m). Blockers already always steered; nit ping-pong guard is
+  unchanged.
+
+## 0.1.6 (2026-08-30)
+
+### Fixed
+
+- Deferred (cooldown) advisor notes are now visible immediately as a display-only
+  card ("Advisor (deferred — next turn)") at settle time. Previously they sat in
+  the SDK's pending-next-turn queue with no visual presence and only materialized
+  when the user's next prompt flushed them into the agent's context — looking
+  like the advisor stayed silent and then blurted a note out after user input
+  (session 01a05099, 1h37m gap). The flushed LLM message is now `display:false`
+  so the note never renders twice. Anti-ping-pong deferral behavior unchanged.
+
 ## 0.1.5 (2026-08-29)
 
 ### Added

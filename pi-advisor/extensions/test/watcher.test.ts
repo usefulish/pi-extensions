@@ -88,20 +88,41 @@ describe("reviewTurn", () => {
     assert.equal(rt.stats.reviews, 1);
   });
 
-  it("second distinct concern within cooldown is deferred to a next-turn aside", async () => {
+  it("second distinct concern within cooldown still steers (concerns never defer)", async () => {
     reply = '{"severity":"concern","note":"first concern about imports"}';
     const { rt, e } = setup(5);
     await reviewTurn(rt, ctx(e), asHost(host), fake);
     assert.equal(host.userMessages.length, 1, "first concern steers");
     assert.equal(rt.steerCooldownTurns, 3, "steer arms the cooldown");
-    // second distinct concern arrives inside the cooldown window → deferred aside
+    // second distinct concern arrives inside the cooldown window → still steers:
+    // concerns carry a must-address contract, only nits defer
     reply = '{"severity":"concern","note":"second distinct concern about tests"}';
+    await reviewTurn(rt, ctx([...e, ...entries(4, 2)]), asHost(host), fake);
+    assert.equal(host.userMessages.length, 2, "second concern steers despite cooldown");
+    assert.equal(host.asides.length, 0, "no deferral for concerns");
+    assert.equal(host.cards.length, 0, "no deferred card for concerns");
+    assert.equal(rt.stats.concerns, 2, "still counted once per accepted note");
+  });
+
+  it("second distinct nit within cooldown is deferred to a next-turn aside", async () => {
+    reply = '{"severity":"nit","note":"first nit about imports"}';
+    const { rt, e } = setup(5);
+    await reviewTurn(rt, ctx(e), asHost(host), fake);
+    assert.equal(host.userMessages.length, 1, "first nit steers");
+    // second distinct nit arrives inside the cooldown window → deferred aside
+    reply = '{"severity":"nit","note":"second distinct nit about tests"}';
     await reviewTurn(rt, ctx([...e, ...entries(4, 2)]), asHost(host), fake);
     assert.equal(host.userMessages.length, 1, "no second steer while on cooldown");
     assert.equal(host.asides.length, 1, "deferred as LLM-visible next-turn aside");
     assert.equal(host.asides[0].options?.deliverAs, "nextTurn");
+    assert.equal(host.asides[0].message.display, false, "deferred LLM message is not displayed — the immediate card is the visible surface");
+    assert.equal(host.asides[0].message.details.deferred, true, "message details carry the deferred flag (message-renderer label parity)");
+    assert.equal(host.cards.length, 1, "deferred note gets an immediate display card");
+    assert.equal(host.cards[0].data.deferred, true, "card marked deferred");
+    assert.equal(host.cards[0].data.severity, "nit");
+    assert.equal(host.cards[0].data.timestamp, host.asides[0].message.details.timestamp, "card and message share one timestamp");
     assert.ok(host.asides[0].message.content.includes("tests"));
-    assert.equal(rt.stats.concerns, 2, "still counted once per accepted note");
+    assert.equal(rt.stats.nits, 2, "still counted once per accepted note");
   });
 
   it("nit steers via sendUserMessage followUp (accepted notes all wake the idle agent)", async () => {
@@ -128,26 +149,27 @@ describe("reviewTurn", () => {
     assert.equal(rt.stats.concerns, 1);
   });
 
-  it("concern after cooldown expires steers again", async () => {
-    reply = '{"severity":"concern","note":"first concern about imports"}';
+  it("nit after cooldown expires steers again (cooldown recovery cycle)", async () => {
+    reply = '{"severity":"nit","note":"first nit about imports"}';
     const { rt, e } = setup(5);
     await reviewTurn(rt, ctx(e), asHost(host), fake);
     assert.equal(host.userMessages.length, 1);
     assert.equal(rt.steerCooldownTurns, 3, "steer arms the cooldown (immuneTurns)");
-    // Distinct note, but inside the cooldown window → deferred aside
-    reply = '{"severity":"concern","note":"second distinct concern about tests"}';
+    // Distinct nit inside the cooldown window → deferred aside
+    reply = '{"severity":"nit","note":"second distinct nit about tests"}';
     await reviewTurn(rt, ctx([...e, ...entries(4, 2)]), asHost(host), fake);
-    assert.equal(host.userMessages.length, 1, "second concern deferred while on cooldown");
+    assert.equal(host.userMessages.length, 1, "second nit deferred while on cooldown");
     assert.equal(host.asides.length, 1, "deferred as next-turn aside");
-    assert.equal(rt.stats.concerns, 2);
+    assert.equal(host.cards.length, 1, "deferred note gets an immediate display card");
+    assert.equal(rt.stats.nits, 2);
     assert.equal(rt.steerCooldownTurns, 2, "cooldown ticks once per settled turn (deferral does not double-tick)");
-    // Two more settled turns tick the cooldown 2→1→0 → the next concern steers.
-    reply = '{"severity":"concern","note":"third distinct concern after cooldown"}';
+    // Two more settled turns tick the cooldown 2→1→0 → the next nit steers.
+    reply = '{"severity":"nit","note":"third distinct nit after cooldown"}';
     await reviewTurn(rt, ctx([...e, ...entries(4, 2), ...entries(4, 3)]), asHost(host), fake);
     assert.equal(host.userMessages.length, 1, "still deferred (cooldown 1 > 0)");
-    reply = '{"severity":"concern","note":"fourth distinct concern after cooldown"}';
+    reply = '{"severity":"nit","note":"fourth distinct nit after cooldown"}';
     await reviewTurn(rt, ctx([...e, ...entries(4, 2), ...entries(4, 3), ...entries(4, 4)]), asHost(host), fake);
-    assert.equal(host.userMessages.length, 2, "concern steers again after cooldown expired");
+    assert.equal(host.userMessages.length, 2, "nit steers again after cooldown expired");
     assert.equal(rt.steerCooldownTurns, 3, "steer re-arms cooldown");
   });
 

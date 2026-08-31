@@ -18,6 +18,7 @@ interface NoteData {
   note: string;
   timestamp: number;
   downgraded?: boolean;
+  deferred?: boolean;
 }
 
 export default function piAdvisor(pi: ExtensionAPI): void {
@@ -32,7 +33,7 @@ export default function piAdvisor(pi: ExtensionAPI): void {
       ? { ...entry.data, note: sanitizeNote(entry.data.note) }
       : { severity: "nit" as Severity, note: "(unavailable)", timestamp: 0 };
     const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-    const label = data.downgraded ? "Advisor (downgraded)" : "Advisor";
+    const label = data.downgraded ? "Advisor (downgraded)" : data.deferred ? "Advisor (deferred — next turn)" : "Advisor";
     const sev = data.severity === "blocker"
       ? theme.fg("error", data.severity)
       : data.severity === "concern"
@@ -45,7 +46,9 @@ export default function piAdvisor(pi: ExtensionAPI): void {
   });
 
   // Message renderer for next-turn asides (LLM-visible deferred notes). Guard for
-  // older Pi builds/tests that only mock registerEntryRenderer.
+  // older Pi builds/tests that only mock registerEntryRenderer. In the TUI the
+  // deferred message is display:false (the immediate card is the visible surface),
+  // so this is a fallback for non-TUI surfaces that render flushed messages.
   if (typeof (pi as unknown as { registerMessageRenderer?: unknown }).registerMessageRenderer === "function") {
     (pi as unknown as { registerMessageRenderer: typeof pi.registerEntryRenderer }).registerMessageRenderer<NoteData>(REVIEW_ENTRY, (message, { expanded }, theme) => {
       const raw = (message as unknown as { details?: unknown }).details as NoteData | undefined;
@@ -53,7 +56,7 @@ export default function piAdvisor(pi: ExtensionAPI): void {
         ? { ...raw, note: sanitizeNote(raw.note) }
         : { severity: "nit" as Severity, note: "(unavailable)", timestamp: 0 };
       const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-      const label = data.downgraded ? "Advisor (downgraded)" : "Advisor";
+      const label = data.downgraded ? "Advisor (downgraded)" : data.deferred ? "Advisor (deferred — next turn)" : "Advisor";
       const sev = data.severity === "blocker"
         ? theme.fg("error", data.severity)
         : data.severity === "concern"
@@ -110,6 +113,7 @@ export default function piAdvisor(pi: ExtensionAPI): void {
     await reviewTurn(runtime, ctx, {
       sendMessage: (message, options) => pi.sendMessage(message, options as never),
       sendUserMessage: (content, options) => pi.sendUserMessage(content, options),
+      appendEntry: (customType, data) => pi.appendEntry(customType, data),
     }, testIsolated);
   });
 

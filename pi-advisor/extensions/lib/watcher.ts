@@ -121,6 +121,8 @@ export interface WatcherHost {
   /** Defer a note as an LLM-visible next-turn aside (never wakes the agent now). */
   sendMessage(message: { customType: string; content: string; display: boolean; details?: unknown }, options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" }): void;
   sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
+  /** Display-only immediate card (session entry; never enters LLM context). */
+  appendEntry<T = unknown>(customType: string, data?: T): void;
 }
 
 /** Injectable isolated-model call — defaults to the real one; tests pass a fake. */
@@ -192,20 +194,30 @@ export async function reviewTurn(rt: WatcherRuntime, ctx: ExtensionContext, host
     else if (verdict.severity === "blocker") rt.stats.blockers++;
     else rt.stats.concerns++;
     const isBlocker = verdict.severity === "blocker";
-    // OMP-parity post-steer cooldown: after any note steers a turn, non-blocker
-    // notes within the next immuneTurns settled turns are deferred to next-turn
-    // asides rather than waking the agent again. Otherwise every new settled turn
-    // produces fresh transcript text, so the reviewer can emit a NEW note each
-    // cycle and the emission guard's identical-note dedupe never trips — an
-    // unbounded nit/concern ping-pong. Blockers always steer (OMP #5628: handing
-    // off broken work must be acknowledged), and each steer (any severity) re-arms
-    // the cooldown. Deferred asides are LLM-visible on the next user- or
-    // blocker-driven turn — never lost, only deferred.
-    if (!isBlocker && rt.steerCooldownTurns > 0) {
+    const isConcern = verdict.severity === "concern";
+    // Post-steer cooldown: only nits defer. Concerns carry a must-address contract
+    // ("address this or state why it does not apply") — deferring one while its own
+    // template claims authority contradicts the injected agent instructions, and
+    // waiting for the user's next prompt looks like the advisor was ignored.
+    // Blockers always steer (OMP #5628: handing off broken work must be
+    // acknowledged). Nits within the next immuneTurns settled turns after a steer
+    // are deferred to next-turn asides rather than waking the agent again;
+    // otherwise every settled turn's fresh transcript text lets the reviewer emit
+    // a NEW note each cycle and the identical-note dedupe never trips — an
+    // unbounded nit ping-pong. Each steer re-arms the cooldown. Deferred asides are
+    // LLM-visible on the next turn — never lost, only deferred.
+    if (!isBlocker && !isConcern && rt.steerCooldownTurns > 0) {
       // The cooldown ticks once per settled turn at the top of reviewTurn — no
       // extra decrement here (OMP's window is purely turn-count based).
       // nextTurn injects into the agent's context on the next turn without waking it now.
-      host.sendMessage({ customType: REVIEW_ENTRY, content: templates[verdict.severity], display: true, details: { severity: verdict.severity, note: verdict.note, timestamp: Date.now() } }, { deliverAs: "nextTurn" });
+      // display:false — the immediate card below is the visible surface; the flushed
+      // message stays LLM-only so the note doesn't render twice.
+      const at = Date.now();
+      host.sendMessage({ customType: REVIEW_ENTRY, content: templates[verdict.severity], display: false, details: { severity: verdict.severity, note: verdict.note, timestamp: at, deferred: true } }, { deliverAs: "nextTurn" });
+      // Immediate display-only card: without it the deferred note is invisible
+      // until the next user prompt flushes it, looking like the advisor stayed
+      // silent then blurted out a note after user input.
+      host.appendEntry(REVIEW_ENTRY, { severity: verdict.severity, note: verdict.note, timestamp: at, deferred: true });
       return;
     }
     // Steering delivery (blockers always steer; non-blockers steer when off-cooldown).
