@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2 (2026-08-30)
+
+### Changed
+
+- `timeouts.send` default raised 120000 → 300000 ms: a 2-minute client ceiling
+  aborted `a2a_call` against peers whose LLM tasks legitimately run 3-5 minutes
+  (the server's own `replyTimeoutSec` default is 500s). Verified live: a
+  diagnostic peer task aborted at 120s via `a2a_call` but completed over raw
+  HTTP with a longer client timeout.
+
 ## 0.7.1 (2026-08-29)
 
 ### Added

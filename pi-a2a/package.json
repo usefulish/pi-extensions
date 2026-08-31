@@ -1,7 +1,7 @@
 {
   "name": "@bacnh85/pi-a2a",
-  "version": "0.7.1",
-  "description": "A2A Protocol v1.0 bidirectional extension for the Pi coding agent \u2014 distribute tasks to remote agents, be called by them, and self-declare for local session discovery.",
+  "version": "0.7.2",
+  "description": "A2A Protocol v1.0 bidirectional extension for the Pi coding agent — distribute tasks to remote agents, be called by them, and self-declare for local session discovery.",
   "type": "module",
   "license": "MIT",
   "publishConfig": {
