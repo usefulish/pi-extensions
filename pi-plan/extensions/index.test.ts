@@ -488,7 +488,7 @@ describe("plan-mode guidance", () => {
     assert.ok(PLAN_MODE_SERENA_GUIDANCE.includes("serena_get_symbols_overview"));
     assert.ok(PLAN_MODE_SERENA_GUIDANCE.includes("serena_find_symbol"));
     assert.ok(PLAN_MODE_SERENA_GUIDANCE.includes("Use read for docs/config/non-code files"));
-    assert.ok(PLAN_MODE_SERENA_GUIDANCE.includes("Prefer the dedicated ls/grep/find tools"));
+    assert.ok(PLAN_MODE_SERENA_GUIDANCE.includes("Prefer the dedicated ls/ffgrep/fffind tools (FFF: frecency-ranked, paginated) over shell commands"));
     assert.ok(PLAN_MODE_SERENA_GUIDANCE.includes("test, build, and package scripts require confirmation"));
   });
 });

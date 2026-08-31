@@ -87,6 +87,14 @@ describe("semantic miss detection", () => {
 describe("dedicated tool miss detection", () => {
   const active = ["bash", "ls", "find", "grep", "read", "write"];
 
+  it("prefers fff search tools when they are active", () => {
+    const fffActive = [...active, "ffgrep", "fffind"];
+    assert.equal(dedicatedToolForShellCommand("find src -name '*.ts'", fffActive), "fffind");
+    assert.equal(dedicatedToolForShellCommand("grep -R PI_MODEL_TOOLS README.md", fffActive), "ffgrep");
+    // plain builtins still chosen when fff tools are absent
+    assert.equal(dedicatedToolForShellCommand("find src -name '*.ts'", active), "find");
+    assert.equal(dedicatedToolForShellCommand("grep -R PI_MODEL_TOOLS README.md", active), "grep");
+  });
   it("maps simple shell substitutions to dedicated Pi tools", () => {
     assert.equal(dedicatedToolForShellCommand("ls extensions", active), "ls");
     assert.equal(dedicatedToolForShellCommand("find src -name '*.ts'", active), "find");

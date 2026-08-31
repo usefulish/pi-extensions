@@ -49,7 +49,11 @@ export function dedicatedToolForShellCommand(command: unknown, activeTools: read
   if (!trimmed || !commandIsSimple(trimmed)) return undefined;
   if (/^(npm|pnpm|yarn|bun|node|npx|git|make|cargo|go|pytest|python|tsx|tsc|awk)\b/.test(trimmed)) return undefined;
   if (/^ls\b/.test(trimmed) && activeTools.includes("ls")) return "ls";
+  // Prefer the FFF search tools over the plain builtins when registered —
+  // steering "use the dedicated grep tool" should point at ffgrep, not grep.
+  if (/^find\b/.test(trimmed) && activeTools.includes("fffind")) return "fffind";
   if (/^find\b/.test(trimmed) && activeTools.includes("find")) return "find";
+  if (/^(grep|rg|ag|ack)\b/.test(trimmed) && activeTools.includes("ffgrep")) return "ffgrep";
   if (/^(grep|rg|ag|ack)\b/.test(trimmed) && activeTools.includes("grep")) return "grep";
   if (/^cat\s+\S+\s*$/.test(trimmed) && activeTools.includes("read")) return "read";
   if (/^head\s+/.test(trimmed) && activeTools.includes("read")) return "read";
