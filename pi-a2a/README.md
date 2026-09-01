@@ -324,13 +324,18 @@ Or per-terminal via env: `A2A_SELF_IDENTITY=session-a`.
 When a remote peer sends Pi an A2A task, the **host session** now shows what's
 happening — you no longer wonder whether Pi is silently doing work:
 
-- **Arrival** — `[A2A inbound] task from <peer>: <preview>` transcript message
-  + a toast.
+- **Arrival** — `[A2A inbound] dispatch from <peer>: <preview>` transcript
+  message + a toast.
 - **Progress** — the isolated session's tool calls and assistant text deltas
   appear as compact one-line transcript messages (`⚙ bash …`, `✎ …`).
-- **Completion** — `[A2A inbound] task <id> completed (12.3s) — <reply preview>`
-  or `failed: <error>` toast + message. A footer status line shows how many
-  inbound tasks are in flight and from whom.
+- **Completion** — `[A2A inbound] A2A dispatch <label> completed (12.3s) —
+  <reply preview>` or `failed: <error>` toast + message. A footer status line
+  shows how many inbound dispatches are in flight and from whom.
+
+Protocol task ids are labeled as dispatches (`task-1b4f8d1c30d54819` →
+`a2a-1b4`) so a delegated execution reads as one peer-to-peer dispatch, not
+a todo-list item; the raw id stays in the audit log. Transcripts written by
+older versions say `task from` / `task <id> completed` — same meaning.
 
 Toggle with `a2a.ui.transcript` (default `true`):
 
