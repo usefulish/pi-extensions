@@ -406,13 +406,13 @@ describe("gateway peer discovery", () => {
     it("409 self-heal renames → token persists under the RENAMED path, next session PATCHes with it", async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
       const original = globalThis.fetch;
-      const seen: Array<{ method: string; auth?: string; name: string }> = [];
+      const seen: Array<{ method: string; auth?: string; name: string; cardName?: string }> = [];
       globalThis.fetch = (async (url: any, init?: any) => {
         const u = String(url);
         if (u.endsWith("/register")) {
-          const name = JSON.parse(init?.body).name;
-          seen.push({ method: init?.method || "POST", auth: init?.headers?.authorization, name });
-          if (name === "self-1" && (init?.method || "POST") === "POST" && !seen.some((s) => s.auth === "Bearer ct-new")) return makeResp({ error: "peer registered by another identity" }, 409);
+          const body = JSON.parse(init?.body);
+          seen.push({ method: init?.method || "POST", auth: init?.headers?.authorization, name: body.name, cardName: body.card?.name });
+          if (body.name === "self-1" && (init?.method || "POST") === "POST" && !seen.some((s) => s.auth === "Bearer ct-new")) return makeResp({ error: "peer registered by another identity" }, 409);
           if ((init?.method || "POST") === "POST") return makeResp({ status: "registered", caller_token: "ct-new" }, 200);
           return makeResp({ status: "updated", state: "accepted" }, 200);
         }
@@ -422,7 +422,7 @@ describe("gateway peer discovery", () => {
       try {
         const gw = new GatewayUpstream(
           { url: GW, token: TOKEN, name: "self-1", heartbeatSec: 60, key: "k1", channel: false, piDir: dir },
-          () => ({}), () => {}, () => {},
+          () => ({ name: "self-1" }), () => {}, () => {},
         );
         assert.isTrue(await gw.register("http://127.0.0.1:9911")); // 409 → renamed POST mints
         const renamed = gw.registeredName;
@@ -443,6 +443,10 @@ describe("gateway peer discovery", () => {
         );
         assert.equal(gw3["callerToken"], "ct-new"); // loaded from the renamed file
         assert.equal(seen[0]!.name, "self-1");
+        // Card name follows the RENAMED registration (409 rename consistency).
+        const renamedPost = seen.find((s) => s.method === "POST" && s.name === renamed)!;
+        assert.isOk(renamedPost, "renamed POST present");
+        assert.equal(renamedPost.cardName, renamed, "card.name must equal the registered name post-rename");
       } finally {
         globalThis.fetch = original as any;
         fs.rmSync(dir, { recursive: true, force: true });

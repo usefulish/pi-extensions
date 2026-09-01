@@ -342,7 +342,13 @@ export class GatewayUpstream {
    *  After each (re-)registration, refresh the peer-directory overlay. */
   async register(url: string): Promise<boolean> {
     const at = this.epoch;
-    const body: Record<string, unknown> = { name: this.name, url, card: this.buildCard() };
+    // The card must carry the name ACTUALLY registered: after a 409 self-heal
+    // rename, this.name differs from the card factory's own sessionName()
+    // (which still computes the pre-rename name) — directory entry and card
+    // identity would disagree.
+    const card = this.buildCard();
+    if (card && typeof card === "object") (card as Record<string, unknown>).name = this.name;
+    const body: Record<string, unknown> = { name: this.name, url, card };
     if (this.cfg.upstreamToken) body.upstream_token = this.cfg.upstreamToken;
     // Steady-state heartbeats PATCH with the per-peer caller_token (full card
     // refresh; url re-send covers IP changes). POST is the mint path and the

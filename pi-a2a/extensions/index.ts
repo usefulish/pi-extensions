@@ -361,6 +361,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
               agent: String(args.agent ?? ""),
               message: String(args.message ?? ""),
               contextId: args.context_id ? String(args.context_id) : undefined,
+              discoveredPeers: listPeers({ cfg, piDir: piDir(), mdnsPeers: server?.discoveredMdnsPeers ?? [], selfUrl: server?.url ?? "", gatewayPeers: getGatewayPeers() }),
             }),
           },
         ],
@@ -556,7 +557,8 @@ export default function a2aExtension(pi: ExtensionAPI): void {
         return;
       }
       const cfg = cfgFor(ctx as unknown as ExtensionContext);
-      ctx.ui.notify(await a2aCall({ cfg, piDir: piDir(), agent, message }), "info");
+      const discoveredPeers = listPeers({ cfg, piDir: piDir(), mdnsPeers: server?.discoveredMdnsPeers ?? [], selfUrl: server?.url ?? "", gatewayPeers: getGatewayPeers() });
+      ctx.ui.notify(await a2aCall({ cfg, piDir: piDir(), agent, message, discoveredPeers }), "info");
     },
   });
 
@@ -577,8 +579,9 @@ export default function a2aExtension(pi: ExtensionAPI): void {
         return;
       }
       const cfg = cfgFor(ctx as unknown as ExtensionContext);
+      const discoveredPeers = listPeers({ cfg, piDir: piDir(), mdnsPeers: server?.discoveredMdnsPeers ?? [], selfUrl: server?.url ?? "", gatewayPeers: getGatewayPeers() });
       const results = await Promise.all(
-        agents.map((a) => a2aCall({ cfg, piDir: piDir(), agent: a, message })),
+        agents.map((a) => a2aCall({ cfg, piDir: piDir(), agent: a, message, discoveredPeers })),
       );
       ctx.ui.notify(results.join("\n\n---\n\n"), "info");
     },
@@ -590,6 +593,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
       const cfg = cfgFor(ctx as unknown as ExtensionContext);
       const m = metrics.snapshot();
       const lines = [
+        `Name: ${server?.name ?? (cfg.server.agentName || "(default: <hostname>-<port> once started)")}`,
         `Server: ${server ? "running at " + server.url : cfg.server.enabled ? "enabled (not started)" : "disabled"}`,
         `Outbound: ${m.outbound_total} sent / ${m.inbound_total} replies`,
         `Tasks: ${m.tasks_completed} completed, ${m.tasks_failed} failed`,

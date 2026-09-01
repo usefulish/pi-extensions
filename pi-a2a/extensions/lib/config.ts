@@ -765,6 +765,13 @@ export function normUrl(u: string): string {
   return String(u || "").trim().replace(/\/+$/, "").toLowerCase();
 }
 
+/** Clean an OS hostname for use as a peer-name base: strip mDNS suffixes
+ *  (`MBP-Sao.local` → `mbp-sao`) and lowercase. Empty/missing → "pi". */
+export function cleanHostName(host: string | undefined): string {
+  const h = String(host || "").replace(/\.(local|lan)\.?$/i, "").trim().toLowerCase();
+  return h || "pi";
+}
+
 /** Resolve a peer by configured name OR treat as a direct http(s) URL.
  *  When the direct URL is loopback AND listed in `knownLoopbackUrls` (known
  *  peers: configured peers or local-registry entries — same-machine, same

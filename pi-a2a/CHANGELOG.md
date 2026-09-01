@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.7.6 (2026-09-01)
+
+### Fixed
+
+- Gateway registration: after a 409 collision self-heal rename, the Agent Card
+  sent on subsequent heartbeats now carries the renamed registration name
+  (previously the card kept the pre-rename name, so the directory entry and
+  its card disagreed).
+- `a2a_list`: a discovered peer whose URL matches a gateway proxy entry is no
+  longer double-listed (gateway section takes precedence, mirroring the
+  configured-peer dedupe).
+- `/a2a-config`: the legacy `discovery.gateway` group no longer renders when
+  the block is inert (disabled with all fields at defaults — the placeholder
+  `loadConfig` materializes). A block with non-default fields (name,
+  upstreamToken, heartbeatSec, channel) still renders even when disabled. The panel previously showed a screen of empty "Gateway" rows
+  that pushed the live "Gateways" map a full screen down. Group labels now
+  carry their settings keys — `Gateway (discovery.gateway)` /
+  `Gateways (discovery.gateways)` — and the legacy group only appears when it
+  is live (enabled, or has url/token, e.g. env-sourced). Render-only: save
+  semantics and the keep-inert-block invariant are unchanged.
+
+## 0.7.5 (2026-09-01)
+
+### Changed
+
+- Unpinned session names strip mDNS suffixes and lowercase the hostname
+  (`MBP-Sao.local` + port 9912 → `mbp-sao-9912`) for cleaner, uniform names
+  across machines.
+
+### Note
+
+- A pinned `server.agentName` in settings.json overrides unique naming —
+  every session sharing that config collapses to one name. Leave it empty to
+  get `<hostname>-<port>` per session.
+
+## 0.7.4 (2026-09-01)
+
+### Changed
+
+- Local session name defaults to `hostname-<port>` (e.g. `pi-s2-9912`) instead
+  of bare hostname, so multiple Pi sessions on one machine get unique,
+  directly-callable names in the registry / `a2a_peers` / `a2a_call` instead of
+  colliding on one ambiguous name. An explicitly pinned
+  `server.agentName` is kept verbatim. Gateway registration already suffixed
+  the port — now the local name matches.
+
+## 0.7.3 (2026-09-01)
+
+### Fixed
+
+- `a2a_call` can now call discovered peers (local registry / mDNS) by name, not
+  only by URL — matching what `a2a_peers` advertises. Ambiguous names (two
+  live sessions with the same `agentName`) error with the candidate URLs
+  instead of guessing a target. Discovered-name routing reuses the existing
+  loopback-known-URL token policy verbatim (unknown/mDNS/network URLs never
+  receive a credential).
+- `a2a_orchestrate` now fans out to gateway peers advertising the capability
+  (previously configured peers only — the tool was a no-op with zero
+  configured peers). A configured peer wins over its gateway alias by URL or
+  underlying name, same precedence as `resolvePeer`.
+- `a2a_list` discovered-peer tool list: shows 20 tools with a `(+N more)`
+  suffix instead of silently truncating at 8.
+
 ## 0.7.2 (2026-08-30)
 
 ### Changed

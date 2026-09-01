@@ -225,8 +225,9 @@ Register this session with a self-hosted [a2a-switchboard](https://github.com/ba
 so other accepted peers discover and call it through the gateway's proxy
 (gateway peers appear as `gw/<key>/<name>` and carry the gateway bearer token).
 Configure under `a2a.discovery.gateway` (single) or `a2a.discovery.gateways`
-(multiple) in `settings.json` (or the `/a2a-config` panel → Gateway / Gateways
-groups):
+(multiple) in `settings.json` (or the `/a2a-config` panel → Gateway
+(discovery.gateway) / Gateways (discovery.gateways) groups; the legacy single-
+gateway group is hidden when its block is inert — all-empty + disabled):
 
 ```jsonc
 "a2a": {

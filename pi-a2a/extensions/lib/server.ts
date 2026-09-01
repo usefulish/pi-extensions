@@ -41,7 +41,7 @@ import {
   type Task,
 } from "./protocol";
 import type { A2AConfig } from "./config";
-import { setGatewayRegistrationName, updateGatewayPeers } from "./config";
+import { setGatewayRegistrationName, updateGatewayPeers, cleanHostName } from "./config";
 import {
   AntiLoop,
   audit,
@@ -274,7 +274,7 @@ export class A2AServer {
 
   private buildCard(stripEnrichedMetadata = false): AgentCard {
     const url = this.publicUrl();
-    const name = this.cfg.server.agentName || hostname() || "pi";
+    const name = this.sessionName();
     return buildAgentCard({
       name,
       url,
@@ -287,6 +287,19 @@ export class A2AServer {
         ? this.cardMetadata()
         : undefined,
     });
+  }
+
+  /** Display name: the pinned agentName wins; the unpinned default gets the
+   *  bound port suffixed (hostname-9912) so same-machine sessions don't all
+   *  collide on one registry/discovery name. Mirrors the gateway name
+   *  convention (`<base>-<port>`). `.local`/`.LAN` mDNS suffixes stripped for
+   *  cleaner names (MBP-Sao.local → mbp-sao). */
+  private baseName(): string {
+    return cleanHostName(hostname());
+  }
+
+  private sessionName(): string {
+    return this.cfg.server.agentName || `${this.baseName()}-${this.boundPort ?? this.cfg.server.port}`;
   }
 
   /** Build the A2A-Extensions metadata map from the live session descriptor. */
@@ -320,7 +333,7 @@ export class A2AServer {
       host: resolveBindHost(this.cfg),
       cwd: this.cwd,
       model,
-      agentName: this.cfg.server.agentName || hostname() || "pi",
+      agentName: this.sessionName(),
       sessionName: this.ctx ? (this.ctx as any).getSessionName?.() : undefined,
       selfIdentity: this.cfg.selfIdentity || undefined,
       tools: this.activeTools(),
@@ -438,8 +451,10 @@ export class A2AServer {
       // Unique name per session (name-port) unless explicitly pinned — sessions
       // on the same machine share config, and one gateway entry per live session
       // beats last-registration-wins.
-      const base = gw.name || this.cfg.server.agentName || hostname() || "pi";
-      const name = gw.name ? gw.name : `${base}-${this.boundPort}`;
+      // Same name derivation as the local session (sessionName) — gateway
+      // registration should not diverge (pinned wins, else host-port).
+      // A per-gateway pinned name (discovery.gateways.<key>.name) still wins.
+      const name = gw.name || this.sessionName();
       // Dedicated per-session inbound token: when the entry pins no
       // upstreamToken, mint one per server start and accept it inbound. The
       // switchboard presents it when proxying TO us — the static sharedToken
@@ -474,7 +489,7 @@ export class A2AServer {
           // Exact-match self-filter for the default auto-name — passed even
           // when the user pinned a name, so a stale auto-named entry from a
           // previous run is still filtered.
-          autoName: `${base}-${this.boundPort}`,
+          autoName: `${this.baseName()}-${this.boundPort}`,
         } as import("./gateway.js").GatewayConfig,
         () => this.buildCard() as unknown as Record<string, unknown>,
         this.onError,
@@ -645,6 +660,11 @@ export class A2AServer {
     return this.boundPort;
   }
 
+  /** This session's callable name (pinned agentName or auto `<host>-<port>`). */
+  get name(): string {
+    return this.sessionName();
+  }
+
   /** For tests: how many tasks are currently running. */
   get runningCount(): number {
     return this.running;
@@ -736,7 +756,7 @@ export class A2AServer {
       return this.send(res, 200, this.buildCard(identity === null));
     }
     if (url === "/health" || url === "/") {
-      return this.send(res, 200, { status: "ok", agent: this.cfg.server.agentName || hostname() });
+      return this.send(res, 200, { status: "ok", agent: this.sessionName() });
     }
     if (url === "/metrics") {
       if (this.getIdentity(req) === null) {

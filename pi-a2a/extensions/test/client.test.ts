@@ -7,13 +7,15 @@ import { DEFAULTS } from "./helpers";
 import {
   a2aCall,
   a2aDiscover,
+  a2aList,
   a2aOrchestrate,
   isPrivateHost,
   metrics,
   rpcUrl,
 } from "../lib/client";
 import { buildAgentCard, STATE_COMPLETED } from "../lib/protocol";
-import { setGatewayRegistrationName, gatewayKeyFromUrl } from "../lib/config";
+import { setGatewayRegistrationName, setGatewayPeers, gatewayKeyFromUrl } from "../lib/config";
+import type { DiscoveredPeer } from "../lib/discovery";
 
 // ---------------------------------------------------------------------------
 // fetch mock helpers
@@ -240,6 +242,50 @@ describe("client", () => {
       assert.include(out, "unknown agent 'ghost'");
     });
 
+    it("calls a discovered peer by name", async () => {
+      let postUrl = "";
+      globalThis.fetch = (async (url: string, init?: any) => {
+        if (init?.method === "POST") postUrl = String(url);
+        return makeResp(
+          { jsonrpc: "2.0", id: 1, result: { message: { parts: [{ text: "pong" }] } } },
+          200,
+        );
+      }) as any;
+      const discoveredPeers: DiscoveredPeer[] = [
+        { name: "pi-solo", url: "http://127.0.0.1:9912", source: "local", alive: true },
+      ];
+      const out = await a2aCall({ cfg: DEFAULTS(), piDir, agent: "pi-solo", message: "hi", discoveredPeers });
+      assert.include(out, "pong");
+      assert.include(postUrl, "127.0.0.1:9912");
+    });
+
+    it("errors with candidate URLs for an ambiguous discovered name", async () => {
+      const discoveredPeers: DiscoveredPeer[] = [
+        { name: "pi-s2", url: "http://127.0.0.1:9912", source: "local", alive: true },
+        { name: "pi-s2", url: "http://127.0.0.1:9913", source: "local", alive: true },
+      ];
+      const out = await a2aCall({ cfg: DEFAULTS(), piDir, agent: "pi-s2", message: "hi", discoveredPeers });
+      assert.include(out, "share the name 'pi-s2'");
+      assert.include(out, "9912");
+      assert.include(out, "9913");
+    });
+
+    it("does not attach a bearer token to a discovered peer outside the known set", async () => {
+      let auth = "";
+      globalThis.fetch = (async (_url: string, init?: any) => {
+        if (init?.method === "POST") auth = String(init?.headers?.Authorization ?? "");
+        return makeResp({ jsonrpc: "2.0", id: 1, result: { message: { parts: [{ text: "pong" }] } } }, 200);
+      }) as any;
+      const cfg = DEFAULTS();
+      cfg.server = { ...cfg.server, peerTokens: { anon: "secret-token" } } as any;
+      const discoveredPeers: DiscoveredPeer[] = [
+        // loopback URL but NOT in the local registry (unknown → no credential)
+        { name: "rogue", url: "http://127.0.0.1:9999", source: "local", alive: true },
+      ];
+      await a2aCall({ cfg, piDir, agent: "rogue", message: "hi", discoveredPeers });
+      assert.notInclude(auth, "secret-token");
+    });
+
     it("surfaces peer auth rejection (401)", async () => {
       globalThis.fetch = mockFetch({ rpcStatus: 401 }) as any;
       const cfg = DEFAULTS();
@@ -290,7 +336,48 @@ describe("client", () => {
 
     it("returns a message when no peers match", async () => {
       const out = await a2aOrchestrate({ cfg: DEFAULTS(), piDir, capability: "x", message: "go" });
-      assert.include(out, "No configured peers advertise capability");
+      assert.include(out, "No peers advertise capability");
+    });
+
+    it("fans out to gateway peers advertising the capability", async () => {
+      let gwPost = 0;
+      globalThis.fetch = (async (url: string, init?: any) => {
+        if (init?.method === "POST" && String(url).includes("gw-proxy")) gwPost++;
+        return makeResp(
+          { jsonrpc: "2.0", id: 1, result: { message: { parts: [{ text: "gw reply" }] } } },
+          200,
+        );
+      }) as any;
+      setGatewayPeers({
+        "gw/remote/x": { url: "http://gw-proxy/peer/x/", auth: { type: "bearer", token: "t" }, timeout: 5000, capabilities: ["coding"], viaGateway: true },
+      });
+      try {
+        const out = await a2aOrchestrate({ cfg: DEFAULTS(), piDir, capability: "coding", message: "go" });
+        assert.equal(gwPost, 1, "gateway peer called at its proxy URL");
+        assert.include(out, "gw/remote/x");
+      } finally {
+        setGatewayPeers({});
+      }
+    });
+
+    it("configured peer with the same capability wins over gateway-only entries", async () => {
+      let posts = 0;
+      globalThis.fetch = (async (_url: string, init?: any) => {
+        if (init?.method === "POST") posts++;
+        return makeResp({ jsonrpc: "2.0", id: 1, result: { message: { parts: [{ text: "ok" }] } } }, 200);
+      }) as any;
+      const cfg = DEFAULTS();
+      cfg.peers.local = { url: "http://a", auth: { type: "none" }, timeout: 5000, capabilities: ["coding"] };
+      setGatewayPeers({
+        "gw/remote/local": { url: "http://gw-proxy/peer/local/", auth: { type: "bearer", token: "t" }, timeout: 5000, capabilities: ["coding"], viaGateway: true },
+      });
+      try {
+        const out = await a2aOrchestrate({ cfg, piDir, capability: "coding", message: "go" });
+        assert.equal(posts, 1, "merged by name — one entry, not two");
+        assert.include(out, "local");
+      } finally {
+        setGatewayPeers({});
+      }
     });
 
     it("reports failures when all peers error", async () => {
@@ -349,6 +436,20 @@ describe("client", () => {
       cfg.peers.local = { url: "http://127.0.0.1:9999", auth: { type: "none" }, timeout: 1000, capabilities: [] };
       const out = await a2aCall({ cfg, piDir, agent: "local", message: "hi" });
       assert.notInclude(out, "SSRF");
+    });
+  });
+
+  describe("a2aList", () => {
+    it("shows up to 20 tools with a +N more suffix", () => {
+      const tools = Array.from({ length: 25 }, (_, i) => `tool_${i}`);
+      const out = a2aList({
+        cfg: DEFAULTS(),
+        piDir,
+        discoveredPeers: [{ name: "big", url: "http://127.0.0.1:1/", source: "local", tools }],
+      });
+      assert.include(out, "tool_19");
+      assert.include(out, "(+5 more)");
+      assert.notInclude(out, "tool_20");
     });
   });
 

@@ -1,5 +1,5 @@
 import { assert } from "chai";
-import { buildA2ASettingsPatch, loadConfig, resolvePeer, authHeaders, normUrl, setConfigOverrides, writeSettingsA2A, gatewayEntries, gatewayKeyFromUrl } from "../lib/config";
+import { buildA2ASettingsPatch, loadConfig, resolvePeer, authHeaders, normUrl, setConfigOverrides, writeSettingsA2A, gatewayEntries, gatewayKeyFromUrl, cleanHostName } from "../lib/config";
 import { DEFAULTS } from "./helpers";
 import * as path from "node:path";
 import * as fs from "node:fs";
@@ -1030,6 +1030,16 @@ describe("config", () => {
         if (oldPiDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
         else process.env.PI_CODING_AGENT_DIR = oldPiDir;
       }
+    });
+  });
+
+  describe("cleanHostName", () => {
+    it("strips mDNS suffixes and lowercases", () => {
+      assert.equal(cleanHostName("MBP-Sao.local"), "mbp-sao");
+      assert.equal(cleanHostName("hermes-lxc.LAN."), "hermes-lxc");
+      assert.equal(cleanHostName("Pi-Server"), "pi-server");
+      assert.equal(cleanHostName(""), "pi");
+      assert.equal(cleanHostName(undefined), "pi");
     });
   });
 

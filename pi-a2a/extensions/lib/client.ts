@@ -40,7 +40,7 @@ import {
   loadConversation,
   persistMessage,
 } from "./persistence";
-import { clean } from "./discovery";
+import { clean, type DiscoveredPeer } from "./discovery";
 import { list as listRegistry } from "./registry";
 
 // ---------------------------------------------------------------------------
@@ -493,15 +493,33 @@ export async function a2aCall(opts: {
   agent: string;
   message: string;
   contextId?: string;
+  /** Live discovered peers (listPeers output) — lets local/mDNS peers be called by name. */
+  discoveredPeers?: DiscoveredPeer[];
 }): Promise<string> {
   const agent = (opts.agent || "").trim();
   const message = (opts.message || "").trim();
   if (!agent || !message) return "Error: both 'agent' and 'message' are required.";
-  const peer = resolvePeer(opts.cfg, agent, { knownLoopbackUrls: knownLoopbackUrls(opts.cfg, opts.piDir) });
+  const known = knownLoopbackUrls(opts.cfg, opts.piDir);
+  let peer = resolvePeer(opts.cfg, agent, { knownLoopbackUrls: known });
+  if (!peer || !peer.url) {
+    // Discovered-peer name lookup (local registry / mDNS). Ambiguous names
+    // error with the candidate URLs instead of guessing a target.
+    const matches = (opts.discoveredPeers ?? []).filter((d) => d.name === agent && d.url);
+    if (matches.length > 1) {
+      return (
+        `Error: ${matches.length} discovered peers share the name '${agent}' — ` +
+        `call by URL: ${matches.map((m) => m.url).join(", ")}`
+      );
+    }
+    if (matches.length === 1) {
+      // ponytail: re-resolve via the URL branch so loopback-token/SSRF policy is inherited verbatim
+      peer = resolvePeer(opts.cfg, matches[0]!.url, { knownLoopbackUrls: known });
+    }
+  }
   if (!peer || !peer.url) {
     return (
       `Error: unknown agent '${agent}'. Configure it under 'a2a.peers' in ` +
-      `settings.json or pass a full http(s):// URL.`
+      `settings.json, pass a full http(s):// URL, or use a name from a2a_peers.`
     );
   }
   let result: SendResult;
@@ -591,10 +609,16 @@ export function a2aList(opts: {
     }
   }
 
-  // Discovered peers (0.2.0) — exclude any already listed as configured (by URL).
-  const configuredUrls = new Set(names.map((n) => peers[n]!.url.replace(/\/+$/, "").toLowerCase()));
+  // Discovered peers (0.2.0) — exclude any already listed above (by URL):
+  // configured peers AND gateway proxy entries (same underlying agent would
+  // otherwise appear twice — once as gw/remote/x, once as a local discovery).
+
+  const listedUrls = new Set([
+    ...names.map((n) => peers[n]!.url.replace(/\/+$/, "").toLowerCase()),
+    ...gateway.map(([, p]) => p.url.replace(/\/+$/, "").toLowerCase()),
+  ]);
   const discovered = (opts.discoveredPeers ?? []).filter(
-    (p) => !configuredUrls.has(p.url.replace(/\/+$/, "").toLowerCase()),
+    (p) => !listedUrls.has(p.url.replace(/\/+$/, "").toLowerCase()),
   );
   if (discovered.length > 0) {
     lines.push("");
@@ -603,7 +627,10 @@ export function a2aList(opts: {
       const parts = [`  - ${clean(p.name)}`, clean(p.url), `[${p.source}]`];
       if (p.cwd) parts.push(`cwd=${clean(p.cwd)}`);
       if (p.model) parts.push(`model=${clean(p.model.provider)}/${clean(p.model.id)}`);
-      if (p.tools && p.tools.length) parts.push(`tools=${p.tools.slice(0, 8).map(clean).join(",")}`);
+      if (p.tools && p.tools.length) {
+        const shown = p.tools.slice(0, 20).map(clean).join(",");
+        parts.push(`tools=${shown}${p.tools.length > 20 ? ` (+${p.tools.length - 20} more)` : ""}`);
+      }
       lines.push(parts.join("  "));
     }
   }
@@ -677,11 +704,23 @@ export async function a2aOrchestrate(opts: {
   mode?: "all" | "first" | "best";
 }): Promise<string> {
   const mode = opts.mode || "all";
-  const matching = Object.entries(opts.cfg.peers).filter(([, p]) => peerHasCapability(p!, opts.capability));
+  // Configured peers + gateway overlay (read-only). Dedupe: a configured peer
+  // wins over its gateway alias — by URL or by the gateway key's underlying
+  // name (`gw/<key>/<name>` → `<name>`) — same precedence as resolvePeer.
+  const configuredUrls = new Set(Object.values(opts.cfg.peers).map((p) => normUrl(p!.url)));
+  const configuredNames = new Set(Object.keys(opts.cfg.peers));
+  const gwUnderlying = (k: string) => k.split("/").pop() ?? k;
+  const pool: Array<[string, Peer]> = [
+    ...Object.entries(getGatewayPeers()).filter(
+      ([k, p]) => !configuredUrls.has(normUrl(p.url)) && !configuredNames.has(gwUnderlying(k)),
+    ),
+    ...Object.entries(opts.cfg.peers),
+  ];
+  const matching = pool.filter(([, p]) => peerHasCapability(p, opts.capability));
   if (matching.length === 0) {
-    return `No configured peers advertise capability '${opts.capability}'.`;
+    return `No peers advertise capability '${opts.capability}'.`;
   }
-  const entries = matching.map(([name, peer]) => ({ name, peer: peer! }));
+  const entries = matching.map(([name, peer]) => ({ name, peer }));
 
   const outcomes = await mapWithConcurrency(entries, ORCHESTRATE_CONCURRENCY, async ({ name, peer }) => {
     try {

@@ -276,6 +276,44 @@ describe("server", () => {
       }
     });
 
+    it("defaults agentName to hostname-port so same-machine sessions don't collide", async () => {
+      const piDir = tmpDir();
+      const { server, stop } = await startServer({ cfg: DEFAULTS(), piDir });
+      try {
+        const self = listRegistry({ piDir, ttlSec: 60 }).find((e) => e.pid === process.pid);
+        assert.isOk(self);
+        assert.include(self!.agentName, `-${server.port}`, "unpinned name must carry the bound port");
+      } finally {
+        await stop();
+      }
+    });
+
+    it("keeps a pinned agentName verbatim (no port suffix)", async () => {
+      const piDir = tmpDir();
+      const cfg = DEFAULTS();
+      cfg.server.agentName = "my-pinned";
+      const { stop } = await startServer({ cfg, piDir });
+      try {
+        const self = listRegistry({ piDir, ttlSec: 60 }).find((e) => e.pid === process.pid);
+        assert.isOk(self);
+        assert.equal(self!.agentName, "my-pinned");
+      } finally {
+        await stop();
+      }
+    });
+
+    it("name getter matches the registered local-registry name", async () => {
+      const piDir = tmpDir();
+      const { server, stop } = await startServer({ cfg: DEFAULTS(), piDir });
+      try {
+        const self = listRegistry({ piDir, ttlSec: 60 }).find((e) => e.pid === process.pid);
+        assert.isOk(self);
+        assert.equal(server.name, self!.agentName);
+      } finally {
+        await stop();
+      }
+    });
+
     it("unregisters from the registry on stop", async () => {
       const piDir = tmpDir();
       const { stop } = await startServer({ cfg: DEFAULTS(), piDir });
