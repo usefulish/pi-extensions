@@ -34,9 +34,11 @@ in `~/.pi/agent/settings.json` under `subagent.roles`:
 
 `/subagent` opens the interactive role editor (TUI panel via the shared
 `@bacnh85/pi-config-panel` kernel; prints the effective mapping headless).
-`/subagent list` lists agents, `/subagent <name>` shows an agent's resolved
-chain, and `/subagent @role` (or `/subagent fast`) shows a role's chain and
-the agents using it.
+The panel supports `+ Add role` / `− Remove role` (custom roles are deletable,
+built-ins reset to their bundled default) and shows each agent's default
+(no-override) chain on its row. `/subagent list` lists agents,
+`/subagent <name>` shows an agent's resolved chain, and `/subagent @role`
+(or `/subagent fast`) shows a role's chain and the agents using it.
 
 ## Live progress widget
 

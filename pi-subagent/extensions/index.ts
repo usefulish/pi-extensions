@@ -378,7 +378,7 @@ export default function (pi: ExtensionAPI) {
 
       const openRolesEditor = async (): Promise<void> => {
         // Role mapping editor: panel in TUI, plain text otherwise.
-        const [{ openConfigPanel }, { buildRows, buildRolesPanelCfg, cfgToPatch, preserveUnknownAgentModels, writeSubagentSection }] = await Promise.all([
+        const [{ openConfigPanel }, { buildRows, buildRolesPanelCfg, cfgToPatch, makeAddRoleAction, makeRemoveRoleAction, preserveUnknownAgentModels, writeSubagentSection }] = await Promise.all([
           import("@bacnh85/pi-config-panel"),
           import("./roles-panel.ts"),
         ]);
@@ -401,20 +401,31 @@ export default function (pi: ExtensionAPI) {
         }
         const current = readSubagentRolesGlobal();
         const working = buildRolesPanelCfg(discovery.agents, current);
+        // Actions (add/remove role) set model.dirty but not editedKeys — guard
+        // the save on a working-copy diff instead (pi-a2a pattern).
+        const before = JSON.stringify([working.roles, working.agentModels]);
+        const notify = (message: string, kind?: "info" | "warning" | "error") => ctx.ui.notify(message, kind ?? "info");
         const panelOptions = {
           models: () => {
             try { return ctx.modelRegistry.getAvailable().map((m) => `${m.provider}/${m.id}`); }
             catch { return []; }
           },
-          roles: () => [...Object.keys(DEFAULT_ROLES), ...Object.keys(readSubagentRolesGlobal().roles)],
+          // Working copy: tracks live edits + freshly added (unsaved) roles.
+          roles: () => Object.keys(working.roles),
+          effectiveRoles: working.roles,
+        };
+        const actions = {
+          addRole: makeAddRoleAction(working, { notify }),
+          removeRole: makeRemoveRoleAction(working, { notify }),
         };
         await openConfigPanel({
           ctx,
           cfg: working,
-          build: (cfg) => buildRows(cfg, discovery.agents, panelOptions),
+          actions,
+          build: (cfg, panelActions) => buildRows(cfg, discovery.agents, panelOptions, panelActions),
           title: "Subagent model roles",
-          onSave: (saved, editedKeys) => {
-            if (!(saved && editedKeys && editedKeys.size > 0)) return;
+          onSave: (saved) => {
+            if (!saved || JSON.stringify([working.roles, working.agentModels]) === before) return;
             const patch = cfgToPatch(working);
             patch.agentModels = preserveUnknownAgentModels(
               patch.agentModels,

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.17.0 (2026-08-31)
+
+### Added
+
+- **Add/remove model roles from the `/subagent` panel** — new `+ Add role` /
+  `− Remove role` action rows (two-prompt flow: name → chain). Custom roles are
+  deletable; built-in roles (`fast`/`coder`/`smart`) reset to their bundled
+  default. New names validate against `[A-Za-z0-9._-]{1,64}` with
+  case-insensitive collision checks.
+- **Per-agent default display** — each override row now shows the agent's
+  default (no-override) chain, e.g. `scout  (default: @fast → zai-coding-cn/
+  glm-5-turbo, …)`, so blank = inherit is meaningful. Labels track live role
+  edits and freshly added roles appear in `@role` completions immediately.
+- Panel save is now guarded by a working-copy content diff (action-only
+  sessions — add/remove without row edits — previously left `editedKeys` empty
+  and silently skipped persistence).
+
 ## 0.16.1 (2026-08-29)
 
 ### Added

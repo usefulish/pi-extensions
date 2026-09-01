@@ -17,7 +17,7 @@ import {
   splitThinkingSuffix,
   type RolesConfig,
 } from "../roles.ts";
-import { buildRows, buildRolesPanelCfg, cfgToPatch } from "../roles-panel.ts";
+import { buildRows, buildRolesPanelCfg, cfgToPatch, defaultChainLabel, makeAddRoleAction, makeRemoveRoleAction, removeRoleFromCfg, validateNewRoleName } from "../roles-panel.ts";
 import { discoverAgents, getModelCandidates } from "../agents.ts";
 import type { AgentConfig } from "../agents.ts";
 
@@ -307,6 +307,110 @@ describe("roles panel", () => {
     const fastRow = groups[0].rows.find((r) => r.key === "role.fast")!;
     fastRow.set("a/x, a/y");
     assert.equal(cfg.roles.fast, "a/x, a/y");
+  });
+
+  it("agent row labels show the default chain when effectiveRoles provided", () => {
+    const cfg = buildRolesPanelCfg(agents, { roles: structuredClone(DEFAULT_ROLES), agentModels: {} });
+    const groups = buildRows(cfg, agents, { models: () => [], roles: () => [], effectiveRoles: DEFAULT_ROLES });
+    const scout = groups[1].rows.find((r) => r.key === "agent.scout")!;
+    assert.ok(scout.label.includes("@fast"), `expected @fast alias in label, got: ${scout.label}`);
+    assert.ok(scout.label.includes(DEFAULT_ROLES.fast[0]), `expected resolved chain in label, got: ${scout.label}`);
+    // without effectiveRoles, defaults still apply
+    const groupsBare = buildRows(cfg, agents);
+    const scoutBare = groupsBare[1].rows.find((r) => r.key === "agent.scout")!;
+    assert.ok(scoutBare.label.includes("@fast"));
+  });
+
+  it("buildRows appends add/remove action rows when actions provided", () => {
+    const cfg = buildRolesPanelCfg(agents, { roles: structuredClone(DEFAULT_ROLES), agentModels: {} });
+    const actions = {
+      addRole: { label: "Add role", run: () => {} },
+      removeRole: { label: "Remove role", run: () => {} },
+    };
+    const groups = buildRows(cfg, agents, undefined, actions);
+    const keys = groups[0].rows.map((r) => r.key);
+    assert.ok(keys.includes("action.addRole"));
+    assert.ok(keys.includes("action.removeRole"));
+    // action rows are action kind and route run() through set
+    const addRow = groups[0].rows.find((r) => r.key === "action.addRole")!;
+    assert.equal(addRow.kind, "action");
+    // without actions, no action rows (backward compat)
+    const bare = buildRows(cfg, agents);
+    assert.ok(!bare[0].rows.some((r) => r.key.startsWith("action.")));
+  });
+
+  it("defaultChainLabel: alias → chain, plain models, parent fallback", () => {
+    const roles = structuredClone(DEFAULT_ROLES);
+    // role alias
+    const label = defaultChainLabel({ name: "s", model: "@fast" }, roles);
+    assert.ok(label.startsWith("default: @fast → "), label);
+    // plain model (no alias prefix)
+    assert.equal(defaultChainLabel({ name: "s", model: "a/one", models: [] }, roles), "default: a/one");
+    // no models at all
+    assert.equal(defaultChainLabel({ name: "s" }, roles), "default: parent fallback");
+  });
+
+  it("validateNewRoleName rejects invalid/colliding names", () => {
+    const known = ["fast", "coder", "smart"];
+    assert.equal(validateNewRoleName("writer", known), null);
+    assert.equal(validateNewRoleName("code-review.v2_x", known), null);
+    assert.ok(validateNewRoleName("", known));
+    assert.ok(validateNewRoleName("has space", known));
+    assert.ok(validateNewRoleName("@at", known));
+    assert.ok(validateNewRoleName("a".repeat(65), known));
+    assert.ok(validateNewRoleName("FAST", known), "case-insensitive collision");
+  });
+
+  it("removeRoleFromCfg resets built-ins and deletes customs", () => {
+    const cfg = buildRolesPanelCfg([], { roles: { ...structuredClone(DEFAULT_ROLES), writer: ["a/one"] }, agentModels: {} });
+    assert.equal(removeRoleFromCfg(cfg, "fast"), "reset");
+    assert.equal(cfg.roles.fast, "");
+    assert.equal(removeRoleFromCfg(cfg, "WRITER"), "deleted");
+    assert.equal(cfg.roles.writer, undefined);
+    assert.equal(removeRoleFromCfg(cfg, "ghost"), null);
+  });
+
+  it("addRole action validates and mutates the working config", async () => {
+    // full flow: name prompt then chain prompt
+    const cfg = buildRolesPanelCfg([], { roles: structuredClone(DEFAULT_ROLES), agentModels: {} });
+    const add = makeAddRoleAction(cfg, {});
+    let step = 0;
+    await add.run((_label, onDone) => { step += 1; onDone(step === 1 ? "writer" : "a/one, a/two"); });
+    assert.equal(cfg.roles.writer, "a/one, a/two");
+
+    // case-insensitive duplicate name aborts with a notify
+    const notes: string[] = [];
+    const cfg2 = buildRolesPanelCfg([], { roles: structuredClone(DEFAULT_ROLES), agentModels: {} });
+    const add2 = makeAddRoleAction(cfg2, { notify: (m) => notes.push(m) });
+    await add2.run((_label, onDone) => onDone("FAST"));
+    assert.ok(!("FAST" in cfg2.roles) && cfg2.roles.fast === "");
+    assert.ok(notes.some((n) => n.includes("already exists")));
+
+    // invalid name aborts
+    const cfg3 = buildRolesPanelCfg([], { roles: structuredClone(DEFAULT_ROLES), agentModels: {} });
+    const add3 = makeAddRoleAction(cfg3, {});
+    await add3.run((_label, onDone) => onDone("has space"));
+    assert.ok(!("has space" in cfg3.roles));
+
+    // blank chain aborts
+    const cfg4 = buildRolesPanelCfg([], { roles: structuredClone(DEFAULT_ROLES), agentModels: {} });
+    const add4 = makeAddRoleAction(cfg4, {});
+    let step4 = 0;
+    await add4.run((_label, onDone) => { step4 += 1; onDone(step4 === 1 ? "writer" : ""); });
+    assert.ok(!("writer" in cfg4.roles));
+  });
+
+  it("removeRole action resets built-ins via removeRoleFromCfg", async () => {
+    const cfg = buildRolesPanelCfg([], { roles: structuredClone(DEFAULT_ROLES), agentModels: {} });
+    const notes: string[] = [];
+    const remove = makeRemoveRoleAction(cfg, { notify: (m) => notes.push(m) });
+    await remove.run((label, onDone) => onDone("fast"));
+    assert.equal(cfg.roles.fast, "");
+    assert.ok(notes.some((n) => n.includes("reset to bundled default")));
+    // empty pick is a no-op; unknown pick warns
+    await remove.run((label, onDone) => onDone(undefined));
+    await remove.run((label, onDone) => onDone("ghost"));
+    assert.ok(notes.some((n) => n.includes('No role named')));
   });
 });
 

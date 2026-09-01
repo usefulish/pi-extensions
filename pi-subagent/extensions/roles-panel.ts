@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { row } from "@bacnh85/pi-config-panel";
-import type { PanelGroup } from "@bacnh85/pi-config-panel";
+import type { PanelAction, PanelGroup, PanelRow } from "@bacnh85/pi-config-panel";
 
 // ponytail: local structural type — the kernel only reads value/label/
 // description, so this stays compatible with the published 0.1.0 range while
@@ -24,7 +24,8 @@ interface CompletionItem {
   description?: string;
 }
 import type { AgentConfig } from "./agents.ts";
-import { DEFAULT_ROLES, readSubagentRoles, type RolesConfig } from "./roles.ts";
+import { getModelCandidates } from "./agents.ts";
+import { DEFAULT_ROLES, readSubagentRoles, resolveAgentModelChain, type RoleMap, type RolesConfig } from "./roles.ts";
 
 // ---------------------------------------------------------------------------
 // Settings persistence (global only — repo .pi/settings.json is read-only)
@@ -98,6 +99,9 @@ export interface RolesPanelOptions {
   models: () => string[];
   /** Known role names (defaults + configured), offered as `@role` on agent rows. */
   roles: () => string[];
+  /** Effective role chains used to render each agent's default (falls back to
+   *  DEFAULT_ROLES). Pass the working copy's roles so labels track live edits. */
+  effectiveRoles?: RoleMap;
 }
 
 /** Seed a working config from current effective settings + bundled agents. */
@@ -115,10 +119,29 @@ export function buildRolesPanelCfg(agents: AgentConfig[], current: RolesConfig):
   return cfg;
 }
 
+/** Human-readable default (no-override) chain for an agent's panel row label. */
+export function defaultChainLabel(
+  agent: Pick<AgentConfig, "name" | "model" | "models">,
+  roles: RoleMap,
+): string {
+  const raw = getModelCandidates(agent);
+  const alias = raw.filter((m) => m.startsWith("@")).join(", ");
+  const { candidates } = resolveAgentModelChain(agent, { roles, agentModels: {} });
+  const chain = candidates.length > 0 ? candidates.join(", ") : "parent fallback";
+  // alias is @-prefixed, candidates are expanded model ids — never equal.
+  return alias ? `default: ${alias} → ${chain}` : `default: ${chain}`;
+}
+
 /** Build panel groups. Role rows first, then one override row per agent.
  *  `options` adds inline model/@role completions when provided (optional so
- *  existing unit tests and non-TUI callers stay unchanged). */
-export function buildRows(cfg: RolesPanelCfg, agents: AgentConfig[], options?: RolesPanelOptions): PanelGroup[] {
+ *  existing unit tests and non-TUI callers stay unchanged). `actions` appends
+ *  the + Add role / − Remove role action rows when provided. */
+export function buildRows(
+  cfg: RolesPanelCfg,
+  agents: AgentConfig[],
+  options?: RolesPanelOptions,
+  actions?: Record<string, PanelAction>,
+): PanelGroup[] {
   const defaultChain = (name: string) => Array.isArray(DEFAULT_ROLES[name]) ? (DEFAULT_ROLES[name] as string[]).join(", ") : String(DEFAULT_ROLES[name] ?? "");
   const modelItems = (): CompletionItem[] =>
     (options?.models() ?? []).sort().map((ref) => ({ value: ref }));
@@ -135,15 +158,23 @@ export function buildRows(cfg: RolesPanelCfg, agents: AgentConfig[], options?: R
       cfg.roles[name] = String(v ?? "").trim();
     }, withCompletions(modelItems));
   });
+  const effective = options?.effectiveRoles ?? DEFAULT_ROLES;
   const agentRows = agents.map((agent) =>
-    row(`agent.${agent.name}`, agent.name, "string", cfg.agentModels[agent.name] ?? "", (v) => {
+    row(`agent.${agent.name}`, `${agent.name}  (${defaultChainLabel(agent, effective)})`, "string", cfg.agentModels[agent.name] ?? "", (v) => {
       const value = String(v ?? "").trim();
       if (value) cfg.agentModels[agent.name] = value;
       else delete cfg.agentModels[agent.name];
     }, withCompletions(() => [...modelItems(), ...roleItems()])),
   );
+  const actionRows: PanelRow[] = [];
+  if (actions?.addRole) {
+    actionRows.push({ key: "action.addRole", label: "+ Add role", kind: "action", value: undefined, set: (p) => actions.addRole!.run(p as never) });
+  }
+  if (actions?.removeRole) {
+    actionRows.push({ key: "action.removeRole", label: "− Remove role", kind: "action", value: undefined, set: (p) => actions.removeRole!.run(p as never) });
+  }
   return [
-    { key: "roles", label: "Model roles (chain, blank = default)", rows: roleRows },
+    { key: "roles", label: "Model roles (chain, blank = default)", rows: [...roleRows, ...actionRows] },
     { key: "agents", label: "Per-agent overrides (blank = inherit)", rows: agentRows },
   ];
 }
@@ -163,6 +194,88 @@ export function cfgToPatch(cfg: RolesPanelCfg): { roles: RolesConfig["roles"]; a
     if (trimmed) agentModels[name] = trimmed;
   }
   return { roles, agentModels };
+}
+
+/** Validate a new role name; returns an error message or null when OK. */
+export function validateNewRoleName(name: string, known: readonly string[]): string | null {
+  const trimmed = name.trim();
+  if (!trimmed) return "Role name is empty.";
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(trimmed)) {
+    return `Invalid role name "${trimmed}" — use letters, digits, dot, dash, underscore (max 64).`;
+  }
+  const clash = known.find((k) => k.toLowerCase() === trimmed.toLowerCase());
+  if (clash) return `Role @${clash} already exists.`;
+  return null;
+}
+
+/** Apply a role removal to the working config. Built-in roles (DEFAULT_ROLES)
+ *  can only be reset to their bundled chain (blank); custom roles are deleted
+ *  (row disappears on rebuild, key dropped by cfgToPatch). Unknown → null. */
+export function removeRoleFromCfg(cfg: RolesPanelCfg, name: string): "reset" | "deleted" | null {
+  const key = Object.keys(cfg.roles).find((k) => k.toLowerCase() === name.trim().toLowerCase());
+  if (!key) return null;
+  if (DEFAULT_ROLES[key] !== undefined) {
+    cfg.roles[key] = "";
+    return "reset";
+  }
+  delete cfg.roles[key];
+  return "deleted";
+}
+
+export interface RoleActionOpts {
+  /** User feedback (defaults to no-op so tests stay quiet). */
+  notify?: (message: string, kind?: "info" | "warning" | "error") => void;
+}
+
+/** "+ Add role" panel action: prompt name → validate → prompt chain → mutate
+ *  the working config (kernel rebuilds rows + marks dirty after the action). */
+export function makeAddRoleAction(cfg: RolesPanelCfg, opts: RoleActionOpts = {}): PanelAction {
+  return {
+    label: "Add role",
+    run: (prompt) => new Promise<void>((resolve) => {
+      prompt("Role name (e.g. writer)", (name) => {
+        const trimmed = (name ?? "").trim();
+        if (!trimmed) return resolve();
+        const err = validateNewRoleName(trimmed, Object.keys(cfg.roles));
+        if (err) {
+          opts.notify?.(err, "warning");
+          return resolve();
+        }
+        prompt("Model chain (comma-separated; @role or * allowed)", (chain) => {
+          const value = (chain ?? "").trim();
+          if (!value) {
+            opts.notify?.("Chain required — role not added.", "warning");
+            return resolve();
+          }
+          cfg.roles[trimmed] = value;
+          resolve();
+        });
+      });
+    }),
+  };
+}
+
+/** "− Remove role" panel action: prompt pick from known roles, then reset
+ *  (built-in) or delete (custom) via removeRoleFromCfg. */
+export function makeRemoveRoleAction(cfg: RolesPanelCfg, opts: RoleActionOpts = {}): PanelAction {
+  return {
+    label: "Remove role",
+    run: (prompt) => new Promise<void>((resolve) => {
+      const names = Object.keys(cfg.roles).sort();
+      if (names.length === 0) {
+        opts.notify?.("No roles to remove.", "warning");
+        return resolve();
+      }
+      prompt(`Remove role (${names.join(", ")})`, (pick) => {
+        if (!pick) return resolve();
+        const result = removeRoleFromCfg(cfg, pick);
+        if (result === "reset") opts.notify?.(`@${pick.trim()} reset to bundled default`, "info");
+        else if (result === "deleted") opts.notify?.(`@${pick.trim()} removed`, "info");
+        else opts.notify?.(`No role named "${pick.trim()}".`, "warning");
+        resolve();
+      });
+    }),
+  };
 }
 
 /** Keep overrides for agents NOT shown in the panel (e.g. overrides for
