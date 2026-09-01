@@ -21,6 +21,11 @@ export function modelAvailable(ctx: ExtensionContext, modelId: string | undefine
   return !!modelId && !!exactModel(ctx.modelRegistry.getAvailable(), modelId);
 }
 
+/** First registry-available ref in the chain, or undefined when none resolve. */
+export function firstAvailable(ctx: ExtensionContext, models: readonly string[]): string | undefined {
+  return models.find((model) => modelAvailable(ctx, model));
+}
+
 export function modelSearchText(model: Model): string {
   const ref = modelRef(model);
   return `${model.id} ${model.provider} ${ref} ${model.provider} ${model.id}${model.name ? ` ${model.name}` : ""}`;

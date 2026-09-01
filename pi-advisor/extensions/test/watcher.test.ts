@@ -4,13 +4,14 @@ import { createRuntime, reviewTurn, SYSTEM, type WatcherHost, type IsolatedCall 
 import type { AdvisorConfig } from "../lib/config";
 
 // Injectable fake isolated-model call — tests never hit a provider.
+// failFrom[n] fails the nth candidate (0-based) to simulate per-model errors.
 let reply = "";
 let failWith: Error | undefined;
 let calls = 0;
-const fake: IsolatedCall = async () => {
+const fake: IsolatedCall = async (_ctx, models) => {
   calls++;
   if (failWith) throw failWith;
-  return reply;
+  return { text: reply, model: models[0] ?? "" };
 };
 
 let host: any;
@@ -43,17 +44,17 @@ function ctx(ents: any[], notifications?: { count: number }): any {
       getLeafId: () => ents[ents.length - 1]?.id,
     },
     getSystemPrompt: () => "PRIMARY PROMPT",
-    modelRegistry: { find: () => ({ contextWindow: 32_768 }) },
+    modelRegistry: { getAvailable: () => [], find: () => ({ contextWindow: 32_768 }) },
     ui: { notify: () => { if (notifications) notifications.count++; } },
   };
 }
 
 function config(over: Partial<AdvisorConfig["watch"]> = {}): AdvisorConfig {
-  return { model: "prov/reviewer", watch: { enabled: true, minToolCalls: 3, immuneTurns: 3, ...over } };
+  return { models: ["prov/reviewer", "prov/reviewer-backup"], watch: { enabled: true, minToolCalls: 3, immuneTurns: 3, ...over } };
 }
 
 function setup(toolCallCount: number, c: AdvisorConfig = config()) {
-  return { rt: createRuntime(c, c.model), e: entries(toolCallCount) };
+  return { rt: createRuntime(c, c.models), e: entries(toolCallCount) };
 }
 
 const asHost = (h: any): WatcherHost => h;
@@ -67,10 +68,17 @@ describe("reviewTurn", () => {
   });
 
   it("never reviews when no advisor model is configured (primary model must not self-review)", async () => {
-    const rt = createRuntime(config(), undefined);
+    const rt = createRuntime(config(), []);
     await reviewTurn(rt, ctx(entries(5)), asHost(host), fake);
     assert.equal(calls, 0);
     assert.equal(rt.stats.reviews, 0);
+  });
+
+  it("records the serving model from the chain on success", async () => {
+    reply = '{"severity":"nit","note":"unused import in foo.ts"}';
+    const { rt, e } = setup(5);
+    await reviewTurn(rt, ctx(e), asHost(host), fake);
+    assert.equal(rt.stats.lastModel, "prov/reviewer", "first chain entry serves and is recorded");
   });
 
   it("skips trivial turns below minToolCalls without a model call", async () => {
@@ -240,6 +248,26 @@ describe("reviewTurn", () => {
     await reviewTurn(rt, ctx(e), asHost(host), fake);
     assert.equal(rt.cursor, e[e.length - 1].id);
   });
+
+  it("chain exhaustion from per-model failures counts as ONE failure per turn", async () => {
+    // Fake chain runner: both candidates fail → the chain throws once.
+    const exhausting: IsolatedCall = async () => { throw new Error("429 rate limited"); };
+    const { rt, e } = setup(5);
+    await reviewTurn(rt, ctx(e), asHost(host), exhausting);
+    assert.equal(rt.stats.modelFailures, 1, "whole-chain failure counts once");
+    assert.equal(rt.stats.paused, false, "single turn failure does not pause");
+  });
+
+  it("runIsolatedChain: abort does not fall through to the next candidate", async () => {
+    const { runIsolatedChain } = await import("../lib/isolated-model");
+    const controller = new AbortController();
+    controller.abort();
+    // Pre-aborted signal → the chain refuses to start any candidate.
+    await assert.rejects(
+      runIsolatedChain({ modelRegistry: { getAvailable: () => [] } } as any, ["prov/a", "prov/b"], { systemPrompt: "", messages: [] }, undefined, controller.signal),
+      /aborted/,
+    );
+  });
 });
 
 describe("cursor semantics", () => {
@@ -251,7 +279,7 @@ describe("cursor semantics", () => {
   });
 
   it("counts only new tool calls since the previous review", async () => {
-    const rt = createRuntime(config({ minToolCalls: 3 }), "prov/reviewer");
+    const rt = createRuntime(config({ minToolCalls: 3 }), ["prov/reviewer"]);
     const first = entries(4);
     await reviewTurn(rt, ctx(first), asHost(host), fake);
     assert.equal(calls, 1);

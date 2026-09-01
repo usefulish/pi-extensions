@@ -102,7 +102,7 @@ describe("index wiring", () => {
       "pi-advisor": { model: "test/advisor-model" },
     }));
     let isolatedCalled = false;
-    __setIsolatedForTest(async () => { isolatedCalled = true; return '{"severity":"nit","note":"unused import in foo.ts"}'; });
+    __setIsolatedForTest(async (_ctx, models) => { isolatedCalled = true; return { text: '{"severity":"nit","note":"unused import in foo.ts"}', model: models[0] }; });
     await fire(pi, state, "session_start", fakeCtx([]));
     await fire(pi, state, "agent_settled", fakeCtx(toolCalls(4)));
     assert.ok(isolatedCalled, "review executed");
@@ -118,7 +118,7 @@ describe("index wiring", () => {
     await writeFile(path.join(TMP, ".pi", "agent", "settings.json"), JSON.stringify({
       "pi-advisor": { model: "test/advisor-model" },
     }));
-    __setIsolatedForTest(async () => '{"severity":"concern","note":"edit went to the wrong file"}');
+    __setIsolatedForTest(async (_ctx, models) => ({ text: '{"severity":"concern","note":"edit went to the wrong file"}', model: models[0] }));
     await fire(pi, state, "session_start", fakeCtx([]));
     await fire(pi, state, "agent_settled", fakeCtx(toolCalls(4)));
     assert.equal(state.userMessages.length, 1);
@@ -132,7 +132,7 @@ describe("index wiring", () => {
     await mkdir(path.join(TMP, ".pi", "agent"), { recursive: true });
     await writeFile(path.join(TMP, ".pi", "agent", "settings.json"), JSON.stringify({ "pi-advisor": {} }));
     let calls = 0;
-    __setIsolatedForTest(async () => { calls++; return '{"severity":"nit","note":"x"}'; });
+    __setIsolatedForTest(async () => { calls++; return { text: '{"severity":"nit","note":"x"}', model: "" }; });
     const ctx = fakeCtx(toolCalls(4));
     await fire(pi, state, "session_start", ctx);
     await fire(pi, state, "agent_settled", ctx);
@@ -159,9 +159,9 @@ describe("index wiring", () => {
     await fire(pi, state, "session_start", fakeCtx([]));
     const rt = state.commands.get("advisor");
     void rt;
-    // observable: settled turn with a configured-but-cleared model must not review
+    // observable: settled turn with a configured-but-cleared chain must not review
     let calls = 0;
-    __setIsolatedForTest(async () => { calls++; return '{"severity":"nit","note":"x"}'; });
+    __setIsolatedForTest(async () => { calls++; return { text: '{"severity":"nit","note":"x"}', model: "" }; });
     await fire(pi, state, "agent_settled", fakeCtx(toolCalls(4)));
     assert.equal(calls, 0, "legacy model not resurrected after explicit disable");
   });
@@ -178,7 +178,7 @@ describe("index wiring", () => {
     cmd.handler("status", ctx); // seeds the module-level registry from ctx
     const all = cmd.getArgumentCompletions("");
     const values = all.map((i: any) => i.value);
-    for (const kw of ["on", "off", "status", "watch-off"]) {
+    for (const kw of ["on", "off", "status", "models", "watch-off"]) {
       assert.ok(values.includes(kw), `keyword ${kw} offered at empty prefix`);
       assert.ok(values.indexOf(kw) < values.findIndex((v: string) => v.includes("/")), `keyword ${kw} sorts before model items`);
     }
@@ -187,5 +187,70 @@ describe("index wiring", () => {
     assert.ok(!o.includes("status"), "non-matching keyword filtered out");
     const none = cmd.getArgumentCompletions("zzz");
     assert.equal(none, null, "no matches → null (popup suppressed)");
+  });
+
+  it("/advisor a, b sets the full chain (comma argument)", async () => {
+    const { pi, state } = createFakePi();
+    piAdvisor(pi);
+    await mkdir(path.join(TMP, ".pi", "agent"), { recursive: true });
+    await writeFile(path.join(TMP, ".pi", "agent", "settings.json"), JSON.stringify({ "pi-advisor": {} }));
+    const ctx = fakeCtx([]);
+    ctx.modelRegistry.getAvailable = () => [
+      { provider: "p", id: "m1", contextWindow: 8_000 },
+      { provider: "p", id: "m2", contextWindow: 8_000 },
+    ] as any;
+    const cmd = state.commands.get("advisor");
+    await cmd.handler("p/m1, p/m2", ctx);
+    const raw = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(TMP, ".pi", "agent", "settings.json"), "utf8"));
+    assert.deepEqual(raw["pi-advisor"].models, ["p/m1", "p/m2"], "whole chain persisted");
+    // completion after a comma carries the typed head (kernel replaces the whole argument)
+    const comps = cmd.getArgumentCompletions("p/m1,").map((i: any) => i.value);
+    assert.deepEqual(comps, ["p/m1, p/m1", "p/m1, p/m2"], "post-comma completion preserves the typed prefix");
+  });
+
+  it("trailing comma is a single model (picker path), not an explicit chain; canonicalized chain dedupes", async () => {
+    const { pi, state } = createFakePi();
+    piAdvisor(pi);
+    await mkdir(path.join(TMP, ".pi", "agent"), { recursive: true });
+    await writeFile(path.join(TMP, ".pi", "agent", "settings.json"), JSON.stringify({ "pi-advisor": {} }));
+    const ctx = fakeCtx([]);
+    ctx.modelRegistry.getAvailable = () => [
+      { provider: "p", id: "m1", contextWindow: 8_000 },
+      { provider: "p", id: "m2", contextWindow: 8_000 },
+    ] as any;
+    const cmd = state.commands.get("advisor");
+    // trailing comma → not the explicit-chain branch: unresolvable entry falls through to picker (throws in print mode)
+    await assert.rejects(cmd.handler("p/m9,", ctx), /Usage:/);
+    // two entries resolving to the same ref dedupe to one (bare id + full ref)
+    await cmd.handler("p/m1, m1", ctx);
+    const raw = JSON.parse(await (await import("node:fs/promises")).readFile(path.join(TMP, ".pi", "agent", "settings.json"), "utf8"));
+    assert.deepEqual(raw["pi-advisor"].models, ["p/m1"], "canonicalized duplicates removed at the call site");
+  });
+
+  it("parseChainArgument trims, drops blanks, and dedupes chain entries", async () => {
+    const { parseChainArgument } = await import("../commands/advisor");
+    assert.deepEqual(parseChainArgument(" a/b , c/d ,, "), ["a/b", "c/d"]);
+    assert.deepEqual(parseChainArgument("a/b"), ["a/b"]);
+    assert.deepEqual(parseChainArgument(""), []);
+    assert.deepEqual(parseChainArgument("a/b, a/b"), ["a/b"]);
+  });
+
+  it("completion helpers split comma arguments (via completion surface)", async () => {
+    const { pi, state } = createFakePi();
+    piAdvisor(pi);
+    const ctx = fakeCtx([]);
+    ctx.modelRegistry.getAvailable = () => [
+      { provider: "p", id: "m1", contextWindow: 8_000 },
+      { provider: "p", id: "m2", contextWindow: 8_000 },
+    ] as any;
+    const cmd = state.commands.get("advisor");
+    cmd.handler("status", ctx); // seeds the module-level registry
+    // bare prefix → keywords + model refs
+    const bare = cmd.getArgumentCompletions("gl");
+    assert.ok(bare === null || bare.every((i: any) => !String(i.value).includes(",")), "no comma-carried prefix at top level");
+    // typed head + fuzzy tail → every item value carries "head, " so the
+    // kernel's whole-argument replacement preserves the first entry
+    const chained = cmd.getArgumentCompletions("p/m1, m2").map((i: any) => i.value);
+    assert.deepEqual(chained, ["p/m1, p/m2"], "post-comma completion preserves the typed head");
   });
 });

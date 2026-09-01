@@ -1,7 +1,7 @@
 import { getMarkdownTheme, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, Text } from "@earendil-works/pi-tui";
 
-import { loadConfig, migrateLegacyAdvisorModel, saveModel } from "./lib/config";
+import { loadConfig, migrateLegacyAdvisorModel, saveModels } from "./lib/config";
 import { isSeverity, sanitizeNote, type Severity } from "./lib/emission-guard";
 import { REVIEW_ENTRY, createRuntime, reseedCursor, reviewTurn, type IsolatedCall, type WatcherRuntime } from "./lib/watcher";
 import { registerAdvisor } from "./commands/advisor";
@@ -70,7 +70,7 @@ export default function piAdvisor(pi: ExtensionAPI): void {
   }
 
   pi.on("before_agent_start", (event, ctx: ExtensionContext): any => {
-    if (!watchEnabled || !runtime?.model || runtime.stats.paused) return;
+    if (!watchEnabled || !runtime || runtime.models.length === 0 || runtime.stats.paused) return;
     // Every turn the agent sees the authority line (static per session,
     // cache-safe): messages starting 'Advisor review' are reviewer findings.
     const line = "Advisor notes: messages starting 'Advisor review' are authoritative reviewer findings. Fix or explicitly justify ignoring each finding.";
@@ -84,13 +84,13 @@ export default function piAdvisor(pi: ExtensionAPI): void {
     runtimeSessionId = sessionId;
     if (runtime && !fresh) return; // same session — already initialized
     const config = await loadConfig(ctx);
-    let model = config.model;
-    if (!model && !migrationAttempted) {
+    let models = config.models;
+    if (models.length === 0 && !migrationAttempted) {
       // One-shot per process: never re-arm after the user disables the advisor.
       migrationAttempted = true;
       const legacy = await migrateLegacyAdvisorModel();
       if (legacy) {
-        model = legacy;
+        models = [legacy];
         ctx.ui.notify(`Advisor model migrated from pi-plan: ${legacy}`, "info");
         // If we migrated on top of a pi-plan that had legacyMigrated:true already,
         // the user config may still lack migrationVersion. Backfill it idempotently
@@ -98,10 +98,10 @@ export default function piAdvisor(pi: ExtensionAPI): void {
         // the real global config directly).
       }
     }
-    runtime = createRuntime(config, model);
+    runtime = createRuntime(config, models);
     watchEnabled = config.watch.enabled;
-    // Watch is gated on both enabled and a configured model — no self-review.
-    if (!watchEnabled || !model) return;
+    // Watch is gated on both enabled and a configured chain — no self-review.
+    if (!watchEnabled || models.length === 0) return;
     // Seed the cursor to the current transcript tail so the first review
     // covers only work that happens after the advisor was loaded.
     const entries = ctx.sessionManager.getEntries() as any[];
@@ -118,10 +118,10 @@ export default function piAdvisor(pi: ExtensionAPI): void {
   });
 
   registerAdvisor(pi, {
-    getModel: () => runtime?.model,
-    setModel: async (model) => {
-      await saveModel(model);
-      if (runtime) runtime.model = model;
+    getModels: () => runtime?.models ?? [],
+    setModels: async (models) => {
+      await saveModels(models);
+      if (runtime) runtime.models = models;
     },
     getThinking: () => undefined,
     getRuntime: () => runtime,

@@ -27,7 +27,7 @@ into the Pi coding agent, each in its own npm package under `@bacnh85/`.
 | **pi-hub** | 0.1.3 | Interactive installer CLI — `npx @bacnh85/pi-hub` browses the @bacnh85 catalog, searches npm `keywords:pi-package`, multi-selects, and shells out to `pi install`. |
 | **pi-notebooklm** | 0.1.8 | Google NotebookLM — notebooks, sources, chat, research, and Studio artifacts via CLI bridge. |
 | **pi-obsidian** | 0.8.14 | Obsidian vault integration for Pi. |
-| **pi-advisor** | 0.1.4 | OMP-style automatic advisor — a second model reviews each settled turn and injects severity-routed notes (nit card / concern steer, immune-turn cooldown, emission guard); plus the on-demand advisor consult moved from pi-plan. |
+| **pi-advisor** | 0.2.0 | OMP-style automatic advisor — a second model reviews each settled turn and injects severity-routed notes (nit card / concern steer, immune-turn cooldown, emission guard), ordered multi-model fallback chain (`pi-advisor.models`, `/advisor models` panel editor); plus the on-demand advisor consult moved from pi-plan. |
 | **pi-plan** | 0.11.1 | Plan mode with read-only gating and plan → implement → verify → review workflow; fallback model chain on overload. |
 | **pi-ponytail** | 0.1.11 | Lazy senior dev mode — YAGNI/stdlib-first coding discipline. Fork of [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail). |
 | **pi-review** | 0.2.8 | Isolated read-only code review with corrected same-session fallback. |

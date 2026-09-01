@@ -37,3 +37,36 @@ export async function runIsolated(
   if (result.stopReason !== "stop") throw new Error(result.errorMessage ?? `Model stopped: ${result.stopReason}`);
   return text(result);
 }
+
+/**
+ * Try each model in priority order: unresolvable candidates are skipped;
+ * any call error (rate limit, quota, unavailable, network) advances to the
+ * next candidate — for a best-effort reviewer any dead candidate should
+ * yield to the next. All exhausted → the last error is rethrown.
+ * No parent-model fallback: the advisor must never use the primary model.
+ */
+/** Delta sink; `attempt` increments each time a new candidate starts, so
+ *  callers can reset progressive state when a dead candidate is replaced. */
+export type ChainOnDelta = (delta: string, attempt: number) => void;
+
+export async function runIsolatedChain(
+  ctx: ExtensionContext,
+  models: readonly string[],
+  context: IsolatedContext,
+  onDelta?: ChainOnDelta,
+  signal?: AbortSignal,
+  reasoning?: string,
+): Promise<{ text: string; model: string }> {
+  let lastError: unknown;
+  for (const [attempt, modelId] of models.entries()) {
+    if (signal?.aborted) throw new Error("Advisor call aborted");
+    try {
+      return { text: await runIsolated(ctx, modelId, context, (delta) => onDelta?.(delta, attempt), signal, reasoning), model: modelId };
+    } catch (error) {
+      // An abort is a caller decision, not a dead model — do not fall through.
+      if (signal?.aborted) throw error;
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`All advisor models failed: ${models.join(", ") || "none configured"}`);
+}

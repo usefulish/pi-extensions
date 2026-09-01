@@ -1,5 +1,5 @@
 import { buildSessionContext, convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { runIsolated } from "./isolated-model";
+import { runIsolatedChain } from "./isolated-model";
 import { createGuard, guardCheck, nextCycle, parseReviewOutput, type GuardState, type Severity } from "./emission-guard";
 import type { AdvisorConfig } from "./config";
 
@@ -31,16 +31,19 @@ export interface WatcherStats {
   blockers: number;
   parseFailures: number;
   modelFailures: number;
+  /** Model ref that served the last successful review. */
+  lastModel: string | undefined;
   paused: boolean;
 }
 
 export function createStats(): WatcherStats {
-  return { reviews: 0, skippedTrivial: 0, nits: 0, concerns: 0, blockers: 0, parseFailures: 0, modelFailures: 0, paused: false };
+  return { reviews: 0, skippedTrivial: 0, nits: 0, concerns: 0, blockers: 0, parseFailures: 0, modelFailures: 0, lastModel: undefined, paused: false };
 }
 
 export interface WatcherRuntime {
   config: AdvisorConfig;
-  model: string | undefined;
+  /** Ordered model fallback chain; empty = advisor inactive. */
+  models: string[];
   /** Entry id up to which the transcript has been reviewed (cursor). */
   cursor: string | undefined;
   guard: GuardState;
@@ -51,20 +54,27 @@ export interface WatcherRuntime {
   steerCooldownTurns: number;
 }
 
-export function createRuntime(config: AdvisorConfig, model: string | undefined): WatcherRuntime {
-  return { config, model, cursor: undefined, guard: createGuard(), stats: createStats(), failures: 0, steerCooldownTurns: 0 };
+export function createRuntime(config: AdvisorConfig, models: string[]): WatcherRuntime {
+  return { config, models, cursor: undefined, guard: createGuard(), stats: createStats(), failures: 0, steerCooldownTurns: 0 };
 }
 
 /**
  * Sanitized bounded transcript evidence — moved verbatim from the pi-plan advisor
  * tool (image-stripping, thinking/signature omission, first + recent window).
+ * Sized from the SMALLEST resolvable context window in the list: the chain may
+ * serve with a fallback that has less room than the primary.
  */
-export function buildEvidence(ctx: ExtensionContext, modelId: string | undefined, messages: any[], systemPrompt: string): string {
-  const parsed = modelId ? parseModelRef(modelId) : undefined;
-  const model = parsed && ctx.modelRegistry.find(parsed.provider, parsed.id);
+export function buildEvidence(ctx: ExtensionContext, modelId: string | readonly string[] | undefined, messages: any[], systemPrompt: string): string {
+  const refs = modelId === undefined ? [] : Array.isArray(modelId) ? modelId : [modelId];
+  const windows = refs
+    .map((ref) => parseModelRef(ref))
+    .filter((parsed): parsed is { provider: string; id: string } => !!parsed)
+    .map((parsed) => ctx.modelRegistry.find(parsed.provider, parsed.id)?.contextWindow)
+    .filter((w): w is number => typeof w === "number" && w > 0);
+  const contextWindow = windows.length > 0 ? Math.min(...windows) : undefined;
   const reserveTokens = 4_096 + Math.ceil((systemPrompt.length + ctx.getSystemPrompt().length) / 4);
   // ponytail: bounded evidence leaves headroom for the primary instructions and advisor response.
-  const maxBytes = Math.min(48 * 1024, Math.max(1_024, ((model?.contextWindow ?? 32_768) - reserveTokens) * 4));
+  const maxBytes = Math.min(48 * 1024, Math.max(1_024, ((contextWindow ?? 32_768) - reserveTokens) * 4));
   const entryLimit = Math.max(256, Math.floor(maxBytes / 2));
   const sanitized = convertToLlm(messages).map((message) => {
     const safe = JSON.parse(JSON.stringify(message, (key, value) => {
@@ -125,17 +135,17 @@ export interface WatcherHost {
   appendEntry<T = unknown>(customType: string, data?: T): void;
 }
 
-/** Injectable isolated-model call — defaults to the real one; tests pass a fake. */
-export type IsolatedCall = typeof runIsolated;
+/** Injectable isolated-model call — defaults to the chain runner; tests pass a fake. */
+export type IsolatedCall = typeof runIsolatedChain;
 
 /** One review step, called from the agent_settled handler while watching is active. */
 // ponytail: module-level guard — one review at a time across the single session
 let reviewing = false;
 
-export async function reviewTurn(rt: WatcherRuntime, ctx: ExtensionContext, host: WatcherHost, isolated: IsolatedCall = runIsolated): Promise<void> {
+export async function reviewTurn(rt: WatcherRuntime, ctx: ExtensionContext, host: WatcherHost, isolated: IsolatedCall = runIsolatedChain): Promise<void> {
   if (rt.stats.paused || reviewing) return;
-  // No advisor model → no watching: never let the primary model review its own turns.
-  if (!rt.model) return;
+  // No advisor models → no watching: never let the primary model review its own turns.
+  if (rt.models.length === 0) return;
   const config = rt.config.watch;
   const entries = ctx.sessionManager.getEntries() as any[];
 
@@ -151,10 +161,10 @@ export async function reviewTurn(rt: WatcherRuntime, ctx: ExtensionContext, host
   reviewing = true;
   try {
     const transcript = buildSessionContext(entries, ctx.sessionManager.getLeafId());
-    const evidence = buildEvidence(ctx, rt.model, transcript.messages, SYSTEM);
+    const evidence = buildEvidence(ctx, rt.models, transcript.messages, SYSTEM);
     let raw: string;
     try {
-      raw = await isolated(ctx, rt.model, {
+      const result = await isolated(ctx, rt.models, {
         systemPrompt: `${SYSTEM}\n\nPRIMARY AGENT SYSTEM PROMPT:\n${ctx.getSystemPrompt()}`,
         messages: [{
           role: "user",
@@ -162,6 +172,8 @@ export async function reviewTurn(rt: WatcherRuntime, ctx: ExtensionContext, host
           timestamp: Date.now(),
         }],
       });
+      raw = result.text;
+      rt.stats.lastModel = result.model;
       rt.failures = 0;
     } catch (error) {
       // ponytail: reviewer failure must never break the primary loop; pause after 3 in a row

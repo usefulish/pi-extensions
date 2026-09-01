@@ -24,6 +24,9 @@ consult tool. Inspired by the advisor subsystem in
 - **On-demand `advisor` tool**: the primary model can consult the configured
   second model for strategic guidance with the full sanitized transcript —
   useful before committing to a consequential approach.
+- **Model fallback chain**: configure multiple reviewer models in priority
+  order — if the first is rate-limited / out of quota / unavailable, the next
+  one serves the review or consult automatically.
 - Review failures never break the primary loop; 3 consecutive failures pause
   watching for the session (`/advisor on` resumes).
 
@@ -40,10 +43,11 @@ npm install -g @bacnh85/pi-advisor
 ## Configure
 
 ```bash
-/advisor <provider/model>   # pick the reviewer/consult model (fuzzy match or picker)
-/advisor status             # model, watch state, counters
+/advisor <provider/model[, …]>  # set the chain (one model or comma-separated fallbacks)
+/advisor models             # edit the full model chain (TUI panel; non-TUI prints it)
+/advisor status             # model chain, watch state, counters
 /advisor on                 # enable watch for this session (also clears a pause)
-/advisor off                # clear the model (disables tool + watch)
+/advisor off                # clear the chain (disables tool + watch)
 ```
 
 Settings live in `~/.pi/agent/settings.json` (global) and `.pi/settings.json`
@@ -52,18 +56,28 @@ Settings live in `~/.pi/agent/settings.json` (global) and `.pi/settings.json`
 ```json
 {
   "pi-advisor": {
-    "model": "anthropic/claude-haiku",
+    "models": ["zai-coding-cn/glm-5.3", "opencode-go/deepseek-v4-pro"],
     "watch": { "enabled": true, "minToolCalls": 3, "immuneTurns": 3 }
   }
 }
 ```
 
+- `models` — ordered fallback chain, first entry is primary. Accepts an array
+  or a comma-separated string (`"a/b, c/d"`). Legacy single `model` string is
+  still honored. If the primary is rate-limited or unavailable at review/consult
+  time, the next candidate serves automatically; a whole-chain failure counts
+  as one review failure (the 3-strike pause still applies). The advisor never
+  falls back to the primary model — it must never review its own turns.
 - `watch.enabled` (default `true`) — turn-end reviewing on session start
 - `watch.minToolCalls` (default `3`, `0` = every turn) — skip trivial turns
 - `watch.immuneTurns` (default `3`) — review window during which the same
   normalized note is not re-delivered (loop protection); distinct concerns and
   blockers still steer immediately.
 
+`/advisor router/glm-cn/glm-5.3, opencode-go/deepseek-v4-pro` sets the whole
+chain in one shot (completion works after each comma). A bare single model
+keeps the fuzzy picker fallback for ambiguous hints.
+
 Use a cheap, fast model for the watcher (it reviews every non-trivial turn);
-use a strong reasoner when consulting on demand — both use the same model in
+use a strong reasoner when consulting on demand — both use the same chain in
 this version.

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.0 (2026-08-31)
+
+### Added
+
+- **Multi-model fallback chain**: `pi-advisor.models` accepts an ordered array
+  (or comma-separated string) of reviewer models; when the first is
+  rate-limited, out of quota, or unavailable, the next candidate serves the
+  review or on-demand consult automatically. Whole-chain failure counts as one
+  review failure (the existing 3-consecutive-failure pause still applies).
+  No parent-model fallback — the advisor never reviews its own turns.
+- **`/advisor models`**: interactive chain editor (TUI panel with model
+  completions, add/remove slots; non-TUI prints the chain and settings path).
+- **`/advisor a/b, c/d`**: set the whole chain in one comma-separated argument;
+  completion after each comma carries the typed prefix.
+- `/advisor status` shows the chain and which model served the last review.
+
+### Changed
+
+- Config key is now `pi-advisor.models` (chain); the legacy `pi-advisor.model`
+  string is still honored (wrapped to a one-entry chain) and is deleted on the
+  next explicit save. No migration needed — existing configs keep working.
+- `/advisor <model>` sets the chain to that single model (chain composition is
+  also available inline via comma-separated `/advisor a, b` and through
+  `/advisor models`); `/advisor off` clears it.
+- New dependency: `@bacnh85/pi-config-panel` (shared panel kernel, same as
+  pi-subagent).
+
 ## 0.1.7 (2026-08-30)
 
 ### Changed
