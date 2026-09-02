@@ -166,10 +166,18 @@ two `worker` agents editing the same files can no longer clobber each other —
 each writes into its own checkout.
 
 - All file mutations land in the worktree; the main checkout stays untouched.
-- On completion, a unified diff of the child's changes is returned in the
-  result and shown in the thread viewer as a `🌿 worktree` badge.
-- **Merging is explicit**: the parent receives the diff and applies it via
-  `apply_patch` / cherry-pick / discard. Nothing is auto-merged.
+- On completion, the unified diff of the child's changes is included in the
+  tool result as a `🌿 worktree patch` block (capped at the per-task output
+  limit) and shown in the thread viewer as a `🌿 worktree` badge.
+- **Merging**: by default the parent merges explicitly via `apply_patch` /
+  `git apply` / discard. Pass `merge: "3way"` (per call/item) to have the diff
+  applied automatically to the parent checkout via `git apply --3way` once the
+  child completes — conflicts leave git's conflict markers in place, are
+  reported in the result (`mergeStatus: "conflict"`), and the patch is still
+  delivered for manual merging. Nothing is ever silently resolved. Applies are
+  serialized so parallel siblings cannot race the checkout.
+- Children start from `HEAD`: uncommitted changes in the parent checkout are
+  invisible to the child and will surface as apply conflicts when merging.
 - The worktree is removed on completion (success, error, or abort).
 - Requires git; when the cwd is not a git repo, the agent falls back to
   in-process execution with a warning (`ponytail`: isolation optimization,

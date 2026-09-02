@@ -668,6 +668,10 @@ const RATE_LIMIT_PATTERNS = [
   /capacity[\s_]exceeded/i,
   /usage[\s_]limit/i,
   /overloaded/i,
+  // Credential-cooldown errors (e.g. "All credentials for model X are
+  // cooling down") are capacity signals too: the model may be unavailable
+  // NOW but the next fallback candidate may not be in cooldown.
+  /credential[\s_]cooldown|cooldown[\s_]window|cooling[\s_]down/i,
 ];
 
 /**
@@ -678,4 +682,24 @@ const RATE_LIMIT_PATTERNS = [
  */
 export function isRateLimitError(message: string): boolean {
   return RATE_LIMIT_PATTERNS.some(p => p.test(message));
+}
+
+/**
+ * Whether a sub-agent result should trigger model fallback: a rate-limit /
+ * credential-cooldown error, or an IDLE timeout (a stalled stream with zero
+ * events for the whole idle window — a known router/provider failure mode).
+ * The HARD lifetime cap is terminal: a task that ran 20 min is genuinely
+ * huge, not a stall, and retrying it on another model doubles the cost.
+ */
+export function isRetryableModelResult(result: {
+  errorMessage?: string;
+  stopReason?: string;
+  status?: string;
+}): boolean {
+  if (result.errorMessage && isRateLimitError(result.errorMessage)) return true;
+  return (
+    result.stopReason === "timeout" &&
+    result.status === "timeout" &&
+    !String(result.errorMessage ?? "").includes("Hard timeout")
+  );
 }

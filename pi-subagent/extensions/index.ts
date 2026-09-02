@@ -31,6 +31,7 @@ import { type AgentColor, type AgentConfig, type AgentScope, discoverAgents, for
 import {
   type SubAgentProgress,
   type SubAgentResult,
+  formatPatchBlock,
   getFinalOutput,
   getResultOutput,
   isFailedResult,
@@ -40,7 +41,7 @@ import {
 } from "./runner.ts";
 import {
   flushWarnings,
-  isRateLimitError,
+  isRetryableModelResult,
   normalizeTimeout,
   resolveSafeCwd,
   validateAgentTools,
@@ -52,6 +53,7 @@ import {
   MAX_PARALLEL_TASKS,
   MAX_CHAIN_LENGTH,
   MAX_INSTRUCTIONS_LENGTH,
+  HARD_TIMEOUT_MS,
 } from "./security.ts";
 import {
   aggregateUsage,
@@ -111,6 +113,7 @@ const TaskItem = Type.Object({
   task: Type.String({ description: "Task to delegate to the agent" }),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent" })),
   timeout: Type.Optional(Type.Number({ description: "Inactivity timeout in ms; aborts on no activity within timeout. Default: 3 min (PI_SUBAGENT_INACTIVITY_TIMEOUT_MINS). The agent always has a lifetime cap: default 20 min  or (PI_SUBAGENT_HARD_TIMEOUT_MINS)." })),
+  merge: Type.Optional(StringEnum(["3way"] as const, { description: "With a worktree-sandboxed agent, apply its diff to the parent checkout via git apply --3way after it completes. Conflicts are reported, not resolved. Default: patch returned only." })),
 });
 
 const ChainItem = Type.Object({
@@ -118,6 +121,7 @@ const ChainItem = Type.Object({
   task: Type.String({ description: "Task with optional {previous} placeholder for prior output" }),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent" })),
   timeout: Type.Optional(Type.Number({ description: "Inactivity timeout in ms; aborts on no activity within timeout. Default: 3 min (PI_SUBAGENT_INACTIVITY_TIMEOUT_MINS). The agent always has a lifetime cap: default 20 min or (PI_SUBAGENT_HARD_TIMEOUT_MINS)." })),
+  merge: Type.Optional(StringEnum(["3way"] as const, { description: "With a worktree-sandboxed agent, apply its diff to the parent checkout via git apply --3way after the step completes. Conflicts are reported, not resolved." })),
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
@@ -157,6 +161,7 @@ const SubagentParams = Type.Object({
   // See Security model section in README.
   cwd: Type.Optional(Type.String({ description: "Working directory (single mode, must be inside workspace)" })),
   timeout: Type.Optional(Type.Number({ description: "Inactivity timeout for the whole run, in ms; resets on activity, aborts on silence. Default 3 min (PI_SUBAGENT_INACTIVITY_TIMEOUT_MINS). Lifetime cap: 20 min or (PI_SUBAGENT_HARD_TIMEOUT_MINS)." })),
+  merge: Type.Optional(StringEnum(["3way"] as const, { description: "Single mode: with a worktree-sandboxed agent, apply its diff to the parent checkout via git apply --3way after it completes. Conflicts are reported, not resolved. Default: patch returned only." })),
   instructions: Type.Optional(Type.String({ description: "Bounded repository/task instructions passed to each child (max 16 KB)" })),
   abortOnFailure: Type.Optional(Type.Boolean({ description: "In parallel mode, cancel remaining tasks when one fails. Default: false.", default: false })),
 });
@@ -596,6 +601,7 @@ export default function (pi: ExtensionAPI) {
       "Bundled agents: scout (fast recon), tester (verification), worker (implementation), general-purpose (fallback), planner (planning), reviewer (review).",
       "For background single tasks use background:true — you will be notified on completion; DO NOT poll or sleep.",
       "Use operation: \"status\" with taskId to inspect a running/completed background task; operation: \"cancel\" to abort one.",
+      "Worktree-sandboxed agents return their diff as a patch block in the result; pass merge: \"3way\" to auto-apply it to the parent checkout (git apply --3way; conflicts reported, never silently resolved).",
       "Use /subagent list to list all available agents, /subagent <name> for agent details, /subagent @role for role detail.",
     ],
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -671,6 +677,7 @@ export default function (pi: ExtensionAPI) {
           ];
           if (snap.result) {
             lines.push(`Output: ${String(snap.result.output).slice(0, 2000)}`);
+            if (snap.result.patchLines) lines.push(`Patch: ${snap.result.patchLines} diff lines (worktree)`);
           } else {
             lines.push("(still running — no final output yet)");
           }
@@ -872,6 +879,7 @@ export default function (pi: ExtensionAPI) {
         heartbeatDetails?: () => SubagentDetails,
         onHeartbeat?: () => void,
         isReadOnly?: boolean,
+        merge?: "3way",
       ): Promise<SubAgentResult> {
         const agent = agents.find((a) => a.name === agentName);
 
@@ -912,12 +920,19 @@ export default function (pi: ExtensionAPI) {
         let tools: string[];
         let loadExtensions: boolean;
         let effectiveTimeoutMs: number | undefined;
+        let effectiveHardMs: number | undefined;
         let safeCwd: string;
         try {
           const resolved = resolveChildTools(agent.tools, agent.sandbox, isReadOnly);
           tools = resolved.tools;
           loadExtensions = resolved.loadExtensions;
-          effectiveTimeoutMs = resolveChildTimeout(timeoutMs, params.timeout);
+          // Precedence: per-call timeout > agent frontmatter default > global default.
+          // The hard lifetime cap must never be shorter than the idle window
+          // (same invariant as the env-var clamp in security.ts) — an agent
+          // with timeout: 45 under a 20-min default cap would otherwise be
+          // hard-killed mid-stream while visibly producing deltas.
+          effectiveTimeoutMs = resolveChildTimeout(timeoutMs ?? (agent.timeout ? agent.timeout * 60 * 1_000 : undefined), params.timeout);
+          effectiveHardMs = Math.max(HARD_TIMEOUT_MS, effectiveTimeoutMs ?? 0);
           safeCwd = resolveChildCwd(cwd);
         } catch (err: unknown) {
           const errorMsg = err instanceof Error ? err.message : String(err);
@@ -958,6 +973,7 @@ export default function (pi: ExtensionAPI) {
               runSubAgent({
                 cwd: safeCwd,
                 sandbox: agent.sandbox === "worktree" ? "worktree" : undefined,
+                merge: agent.sandbox === "worktree" ? merge : undefined,
                 systemPrompt: params.instructions
                 ? `${agent.systemPrompt}\n\n## Task Contract\n${params.instructions.slice(0, MAX_INSTRUCTIONS_LENGTH)}`
                 : agent.systemPrompt,
@@ -969,6 +985,7 @@ export default function (pi: ExtensionAPI) {
                 modelRegistry,
                 signal: parentSignal,
                 timeoutMs: effectiveTimeoutMs,
+                hardTimeoutMs: effectiveHardMs,
                 agentName,
                 thinkingLevel,
                 onMessage: onProgress,
@@ -976,7 +993,7 @@ export default function (pi: ExtensionAPI) {
                 loadExtensions,
                 projectTrusted,
               }),
-            isRateLimited: (result) => Boolean(result.errorMessage && isRateLimitError(result.errorMessage)),
+            isRateLimited: (result) => isRetryableModelResult(result),
             onExhausted: (reason, triedModels, remaining) => {
               const exhaustedStderr = reason === "no-model"
                 ? [
@@ -1035,6 +1052,8 @@ export default function (pi: ExtensionAPI) {
             (progress) => threadStore.updateProgress(thread.id, progress),
             () => makeDetails("chain")(results),
             () => threadStore.refreshHeartbeat(thread.id),
+            undefined,
+            step.merge,
           );
           threadStore.updateThread(thread.id, {
             status: isFailedResult(result) ? (result.stopReason === "aborted" ? "aborted" : "failed") : "completed",
@@ -1055,6 +1074,8 @@ export default function (pi: ExtensionAPI) {
             // Include successful previous step outputs in the error content
             const prevCount = i;
             let contentText = `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}`;
+            const failedPatch = formatPatchBlock(result);
+            if (failedPatch) contentText += `\n\n${failedPatch}`;
             if (prevCount > 0) {
               const prevSummaries = results
                 .slice(0, prevCount)
@@ -1076,16 +1097,22 @@ export default function (pi: ExtensionAPI) {
 
           if (onUpdate) {
             onUpdate({
-              content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+              content: [{ type: "text", text: [getFinalOutput(result.messages) || "(no output)", formatPatchBlock(result)].filter(Boolean).join("\n\n") }],
               details: makeDetails("chain")(results),
             });
           }
         }
 
         const last = results[results.length - 1];
+        // Chain deliverable: final output plus every step's worktree patch,
+        // labeled so the parent can merge them in order.
+        const chainPatches = results
+          .map((r, i) => (formatPatchBlock(r) ? `Step ${i + 1} (${r.agent}): ${formatPatchBlock(r)}` : ""))
+          .filter(Boolean)
+          .join("\n\n");
         return {
           content: [
-            { type: "text", text: getFinalOutput(last.messages) || "(no output)" },
+            { type: "text", text: [getFinalOutput(last.messages) || "(no output)", chainPatches].filter(Boolean).join("\n\n") },
           ],
           details: makeDetails("chain")(results),
         };
@@ -1195,6 +1222,8 @@ export default function (pi: ExtensionAPI) {
                   (progress) => threadStore.updateProgress(parallelThreads[index].id, progress),
                   () => makeDetails("parallel")([...allResults]),
                   () => threadStore.refreshHeartbeat(parallelThreads[index].id),
+                  undefined,
+                  t.merge,
                 );
                 allResults[index] = result;
                 threadStore.updateThread(parallelThreads[index].id, {
@@ -1219,7 +1248,8 @@ export default function (pi: ExtensionAPI) {
               const status = isFailedResult(r)
                 ? `failed${r.stopReason ? ` (${r.stopReason})` : ""}`
                 : "completed";
-              return `### [${r.agent}] ${status}\n\n${output}`;
+              const patch = formatPatchBlock(r);
+              return `### [${r.agent}] ${status}\n\n${output}${patch ? `\n\n${patch}` : ""}`;
             });
 
             let headerText = `Parallel: ${successCount}/${results.length} succeeded`;
@@ -1247,6 +1277,7 @@ export default function (pi: ExtensionAPI) {
             task: params.task,
             cwd: params.cwd,
             timeout: params.timeout,
+            merge: params.merge,
             agentColor: agentToThemeColor(params.agent),
             toolCallId: _toolCallId,
             deps: { pi, ctx, runOne, threadStore },
@@ -1274,6 +1305,8 @@ export default function (pi: ExtensionAPI) {
           (progress) => threadStore.updateProgress(thread.id, progress),
           () => makeDetails("single")([]),
           () => threadStore.refreshHeartbeat(thread.id),
+          undefined,
+          params.merge,
         );
         threadStore.updateThread(thread.id, {
           status: isFailedResult(result) ? (result.stopReason === "aborted" ? "aborted" : "failed") : "completed",
@@ -1293,11 +1326,12 @@ export default function (pi: ExtensionAPI) {
 
         if (isError) {
           const errorMsg = getResultOutput(result);
+          const patch = formatPatchBlock(result);
           return {
             content: [
               {
                 type: "text",
-                text: `Agent ${result.stopReason || "failed"}: ${errorMsg}`,
+                text: `Agent ${result.stopReason || "failed"}: ${errorMsg}${patch ? `\n\n${patch}` : ""}`,
               },
             ],
             details: makeDetails("single")([result]),
@@ -1307,7 +1341,7 @@ export default function (pi: ExtensionAPI) {
 
         return {
           content: [
-            { type: "text", text: getFinalOutput(result.messages) || "(no output)" },
+            { type: "text", text: [getFinalOutput(result.messages) || "(no output)", formatPatchBlock(result)].filter(Boolean).join("\n\n") },
           ],
           details: makeDetails("single")([result]),
         };

@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.19.2 (2026-09-02)
+
+### Fixed
+
+- **Stalled streams now fall back to the next model** — when a provider
+  accepts a request but the stream emits zero events for the entire idle
+  window (known router/provider failure mode, e.g. slow-TTFT models behind
+  omniroute), the run previously died on model #1 with "Idle timeout" and
+  never tried the fallback chain. An IDLE timeout is now treated as a
+  capacity signal (`isRetryableModelResult`): the task retries on the next
+  candidate (each candidate is tried at most once, so worst case is N idle
+  windows). The HARD lifetime cap stays terminal — a task that ran 20 min is
+  genuinely huge, not a stall. Found by live background-task test: trivial
+  20+22 task timed out on glm-5-turbo with zero stream events.
+
+## 0.19.1 (2026-09-02)
+
+### Fixed
+
+- **Model fallback now engages on credential cooldown** — router providers
+  report "All credentials for model X are cooling down" when every key for a
+  model is in its rate-limit window. That message didn't match
+  `RATE_LIMIT_PATTERNS`, so `runWithModelFallback` treated it as a fatal error
+  instead of advancing to the next candidate (e.g. `@fast`
+  glm-5-turbo → gpt-oss-20b → deepseek-v4-flash), aborting subagent and chain
+  runs with "All credentials … are cooling down". Added the cooldown pattern
+  (credential cooldown / cooldown window / cooling down) so capacity signals
+  from the credential layer trigger the same fallback as 429s.
+
+## 0.19.0 (2026-09-02)
+
+### Fixed
+
+- **Reviewer/planner agents no longer abort at the 3-min idle timeout while
+  thinking** — root cause: a `thinking: high` child on a slow model can spend
+  many minutes in one reasoning stretch, and the default 3-min inactivity
+  window kills the run even though it is healthy. Fix: new agent frontmatter
+  field **`timeout: <minutes>`** (1–60) bakes a per-agent idle window; the
+  hard lifetime cap is raised to match so long windows are actually
+  enforceable. Bundled `reviewer` and `planner` agents ship with
+  `timeout: 10`. Per-call `timeout` still overrides. (The idle timer already
+  treats every SDK event — including streaming deltas — as activity; a run
+  that emits no events at all for the window is genuinely hung.)
+  Reported by peer mbp-sao-9915 (review rounds hitting the 180s default).
+
+## 0.18.0 (2026-09-02)
+
+### Fixed
+
+- **Worktree patches now reach the parent model** — `sandbox: worktree` results
+  previously exposed the diff only in TUI details; the tool-result text the
+  parent model reads contained just the child's final message, so the
+  documented "parent merges via apply_patch" flow was impossible in practice.
+  The diff is now appended as a `🌿 worktree patch` block (capped at the
+  per-task output limit) in single, parallel, chain, and background-completion
+  results, and `operation: "status"` reports `Patch: N diff lines`.
+
+### Added
+
+- **`merge: "3way"` per call/item** — with a worktree-sandboxed agent, the
+  captured diff is applied to the parent checkout via `git apply --3way`
+  (temp-file at repo root, applied before worktree removal so the staged blobs
+  are available for 3-way reconstruction). Results carry
+  `mergeStatus: "applied" | "conflict"`; conflicts keep git's markers, report
+  the apply error, and still deliver the patch for manual merging — never
+  silently resolved. Concurrent applies are serialized (OMP `withRepoLock`
+  equivalent) so parallel siblings cannot race the checkout.
+- Applies are mutex-serialized across parallel/background tasks.
+
 ## 0.17.0 (2026-08-31)
 
 ### Added
