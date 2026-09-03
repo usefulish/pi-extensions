@@ -28,7 +28,7 @@ import {
 } from "./lib/client";
 import { A2AServer, type SessionRunner } from "./lib/server";
 import { formatPeers, listPeers } from "./lib/discovery";
-import { activityLine, activityStatusLine, activityToText, classifyLine, preview, type InboundActivity } from "./lib/activity";
+import { activityLine, activityStatusLine, activityToText, classifyLine, dispatchLabel, preview, type InboundActivity } from "./lib/activity";
 import { openPanel, type PanelAction } from "./lib/config-panel";
 
 import { Container, Text } from "@earendil-works/pi-tui";
@@ -203,7 +203,7 @@ function broadcastActivity(
     case "arrived":
       activeInboundTasks.set(a.taskId, { identity: a.identity, last: a });
       // Toast stays short (it would flood the TUI); the transcript carries full text.
-      ctx.ui.notify(`A2A task from ${a.identity}: ${preview(a.text, 160)}`, "info");
+      ctx.ui.notify(`A2A dispatch from ${a.identity}: ${preview(a.text, 160)}`, "info");
       break;
     case "progress":
       activeInboundTasks.set(a.taskId, { identity: activeInboundTasks.get(a.taskId)?.identity ?? "peer", last: a });
@@ -213,8 +213,8 @@ function broadcastActivity(
       activeInboundTasks.delete(a.taskId);
       ctx.ui.notify(
         a.type === "completed"
-          ? `A2A task ${a.taskId.slice(0, 8)} completed (${(a.elapsedMs / 1000).toFixed(1)}s)`
-          : `A2A task ${a.taskId.slice(0, 8)} failed: ${a.error}`,
+          ? `A2A dispatch ${dispatchLabel(a.taskId)} completed (${(a.elapsedMs / 1000).toFixed(1)}s)`
+          : `A2A dispatch ${dispatchLabel(a.taskId)} failed: ${a.error}`,
         a.type === "completed" ? "info" : "error",
       );
       break;
@@ -596,7 +596,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
         `Name: ${server?.name ?? (cfg.server.agentName || "(default: <hostname>-<port> once started)")}`,
         `Server: ${server ? "running at " + server.url : cfg.server.enabled ? "enabled (not started)" : "disabled"}`,
         `Outbound: ${m.outbound_total} sent / ${m.inbound_total} replies`,
-        `Tasks: ${m.tasks_completed} completed, ${m.tasks_failed} failed`,
+        `Dispatches: ${m.tasks_completed} completed, ${m.tasks_failed} failed`,
         `Avg latency: ${m.avg_latency_ms}ms`,
       ];
       ctx.ui.notify(lines.join("\n"), "info");
