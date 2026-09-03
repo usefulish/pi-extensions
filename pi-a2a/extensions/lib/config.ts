@@ -119,6 +119,11 @@ export interface A2AConfig {
     workspace: string;
     maxConcurrent: number;
     replyTimeoutSec: number;
+    /** Supervision window for detached (returnImmediately) tasks, in seconds.
+     *  The caller's HTTP request already returned an ACK, so the reply window
+     *  does not apply — this bounds a detached run instead. 0 = unbounded
+     *  (caller-supervised via GetTask / CancelTask). */
+    asyncTimeoutSec: number;
     agentName: string;
     publicUrl: string;
     sharedToken: string;
@@ -174,6 +179,7 @@ const DEFAULTS: A2AConfig = {
     workspace: "",
     maxConcurrent: 3,
     replyTimeoutSec: 300,
+    asyncTimeoutSec: 86400,
     agentName: "",
     publicUrl: "",
     sharedToken: "",
@@ -276,6 +282,7 @@ export function loadEnv(cwd: string): Record<string, string> {
       /* ignore */
     }
   }
+  const paths = envCandidates(cwd).reverse();
   // Walk from filesystem root up to cwd so cwd wins — but NEVER let a
   // repo-controlled .env.local set security-relevant keys (a coding agent
   // opens attacker-controlled repos; those files must not be able to enable
@@ -284,7 +291,6 @@ export function loadEnv(cwd: string): Record<string, string> {
   // that re-parse is deliberately NOT skipped — its security keys were already
   // merged above and delete-from-copy here cannot remove them. Keep the global
   // read FIRST: it is the only place repo keys could ever be overridden back.
-  const paths = envCandidates(cwd).reverse();
   for (const p of paths) {
     try {
       const parsed = parseDotEnv(readFileSync(p, "utf-8"));
@@ -332,6 +338,7 @@ function sanitizeRepoA2ASettings(s: any): any {
       // keep-forever disk-fill when raised).
       "childTranscripts",
       "childTranscriptRetentionDays",
+      "asyncTimeoutSec",
     ])
       delete srv[k];
     c.server = srv;
@@ -452,6 +459,7 @@ export function loadConfig(opts: {
   cfg.server.workspace = String(srv.workspace ?? "");
   cfg.server.maxConcurrent = num(srv.maxConcurrent, DEFAULTS.server.maxConcurrent);
   cfg.server.replyTimeoutSec = num(srv.replyTimeoutSec ?? env.A2A_REPLY_TIMEOUT, DEFAULTS.server.replyTimeoutSec);
+  cfg.server.asyncTimeoutSec = num(srv.asyncTimeoutSec ?? env.A2A_ASYNC_TIMEOUT, DEFAULTS.server.asyncTimeoutSec);
   cfg.server.agentName = String(srv.agentName ?? env.A2A_AGENT_NAME ?? "");
   cfg.server.publicUrl = String(srv.publicUrl ?? env.A2A_PUBLIC_URL ?? "");
   cfg.server.sharedToken = String(srv.sharedToken ?? env.A2A_BEARER_TOKEN ?? "");

@@ -131,6 +131,19 @@ class TaskStore {
 }
 
 // ---------------------------------------------------------------------------
+// Non-blocking send detection (A2A v1.0 §3.2.2 SendMessageConfiguration)
+// ---------------------------------------------------------------------------
+
+/** True when the caller asked for an immediate in-progress Task ack instead
+ *  of waiting for the terminal state (submit-and-poll). Accepts the
+ *  snake_case spelling some early clients send. */
+function wantsImmediateReturn(params: any): boolean {
+  const cfg = params?.configuration;
+  if (!cfg || typeof cfg !== "object") return false;
+  return cfg.returnImmediately === true || cfg.return_immediately === true;
+}
+
+// ---------------------------------------------------------------------------
 // Rate limiter (sliding window per identity; prunes stale entries)
 // ---------------------------------------------------------------------------
 
@@ -907,6 +920,10 @@ export class A2AServer {
     const inboundText = extractText(params);
     const contextId = String(params.contextId || msg.contextId || newContextId());
     const taskId = newTaskId();
+    // A2A v1.0 §3.2.2 SendMessageConfiguration.returnImmediately — the caller
+    // asks for an immediate in-progress Task instead of waiting for the
+    // terminal state (submit-and-poll).
+    const returnImmediately = wantsImmediateReturn(params);
 
     // Anti-loop: cap per-context turns.
     if (!this.antiLoop.record(contextId)) {
@@ -934,25 +951,60 @@ export class A2AServer {
     }
 
     this.running += 1;
+
+    // Blocking (default): await the run and return the terminal Task.
+    // Non-blocking (returnImmediately): return the in-progress Task as an
+    // ACK right away and let the run continue detached from the HTTP request
+    // — the caller polls GetTask / subscribes / cancels by task id, and the
+    // session is no longer bounded by the caller's reply window (detached
+    // runs are supervised by server.asyncTimeoutSec instead).
+    const execution = this.executeTask(st, identity, inboundText, returnImmediately);
+    if (returnImmediately) return st.task;
+    return execution;
+  }
+
+  /**
+   * Run one stored task to completion and update the store. Never rejects —
+   * failures are classified into the task state (FAILED/CANCELED) exactly as
+   * the blocking path has always done. `this.running` is held for the whole
+   * execution, so detached runs still count against server.maxConcurrent.
+   */
+  private async executeTask(
+    st: StoredTask,
+    identity: string,
+    inboundText: string,
+    detached: boolean,
+  ): Promise<any> {
+    const taskId = st.task.id;
+    const controller = st.controller!;
     const startedAt = Date.now();
-    // Reply-window watchdog. Cleared in the finally below on EVERY exit path:
-    // a runner that throws skips any inline clearTimeout and never aborts the
-    // controller, so without this the timer stayed armed for the full reply
-    // window (default 300s) — the task reported FAILED while the timer kept
-    // the event loop alive (test-suite exit-hang, fleet task #257).
-    let replyTimer: ReturnType<typeof setTimeout> | undefined;
+    // Supervision timer for this run: reply window (blocking) or async window
+    // (detached). Hoisted so the finally can clear it on EVERY settle path —
+    // a timer left armed after a failed run keeps the process alive long
+    // after the suite/server is done (the runner rejects, no abort fires,
+    // nothing clears it: with the 86400s async default that is a full day).
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timeoutMs = this.cfg.server.replyTimeoutSec * 1000;
-      replyTimer = setTimeout(
-        () =>
-          controller.abort(
-            new Error(
-              `reply timeout: exceeded the ${this.cfg.server.replyTimeoutSec}s reply window — session aborted mid-run, reply is truncated`,
+      // Blocking runs are bounded by the reply window (the HTTP request is
+      // holding the caller hostage). Detached runs are bounded by the async
+      // window instead — 0 disables the timer entirely (caller-supervised).
+      const timeoutSec = detached ? this.cfg.server.asyncTimeoutSec : this.cfg.server.replyTimeoutSec;
+      if (timeoutSec > 0) {
+        timer = setTimeout(
+          () =>
+            controller.abort(
+              new Error(
+                detached
+                  ? `async timeout: exceeded the ${timeoutSec}s detached-task window — session aborted mid-run, result is truncated`
+                  : "reply timeout",
+              ),
             ),
-          ),
-        timeoutMs,
-      );
-      controller.signal.addEventListener("abort", () => clearTimeout(replyTimer), { once: true });
+          timeoutSec * 1000,
+        );
+        // Clear on abort too: a runner that ignores its signal and never
+        // settles must not hold the process alive until the timer fires.
+        controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+      }
       const wrapped = wrapInbound(identity, inboundText);
       const runner = this.requireRunner();
       const out = await runner({
@@ -1007,6 +1059,18 @@ export class A2AServer {
       // Distinguish user-initiated cancel (CANCELED) from system timeout/failure (FAILED).
       const state = aborted && st.userCanceled ? STATE_CANCELED : STATE_FAILED;
       this.auditTranscript(taskId, identity, (e as any)?.transcriptPath, (e as any)?.stepCount);
+      // A supervision timeout's ground truth is the abort REASON (it carries
+      // the descriptive "reply/async timeout: exceeded the Ns window …"
+      // text), not whatever error the runner happened to throw when the
+      // abort landed — a runner may reject with its own error and lose the
+      // classification. Prefer the reason only for our own timeout aborts:
+      // client-disconnect aborts carry a generic AbortError, and cancels are
+      // classified above.
+      const reason = controller.signal.reason;
+      const reasonMsg =
+        aborted && !st.userCanceled && reason instanceof Error && /^(reply|async) timeout/.test(reason.message)
+          ? reason.message
+          : undefined;
       this.store.update(taskId, (t) => {
         // Don't clobber a cancel-handler-set CANCELED state with an error message.
         t.status.state = state;
@@ -1016,7 +1080,7 @@ export class A2AServer {
             // Redacted: error messages can embed reply text (parse failures,
             // tool errors quoting the payload) — same outbound trust boundary
             // as the reply artifact.
-            parts: [{ text: redactOutbound(e?.message || String(e)), mediaType: "text/plain" }],
+            parts: [{ text: redactOutbound(reasonMsg ?? e?.message ?? String(e)), mediaType: "text/plain" }],
             messageId: newContextId(),
           };
         }
@@ -1044,6 +1108,11 @@ export class A2AServer {
     } finally {
       if (replyTimer !== undefined) clearTimeout(replyTimer);
       this.running -= 1;
+      // The run settled (completed or classified) — the supervision timer's
+      // job is done. Without this, a FAILED run whose runner threw its own
+      // error (no abort → no listener fire) leaked an armed timer that kept
+      // the process alive after the suite finished.
+      clearTimeout(timer);
     }
   }
 
@@ -1094,6 +1163,15 @@ export class A2AServer {
     // runner's session stops instead of burning tokens nobody will read.
     const disconnect = new AbortController();
     res.on("close", () => disconnect.abort());
+
+    // return_immediately has no effect on streaming operations (A2A v1.0
+    // §3.2.2) — strip it so the stream path keeps its blocking semantics.
+    if (wantsImmediateReturn(params)) {
+      params = {
+        ...params,
+        configuration: { ...(params.configuration ?? {}), returnImmediately: false, return_immediately: false },
+      };
+    }
 
     this.messageSend(params, identity, disconnect.signal)
       .then((task) => {
