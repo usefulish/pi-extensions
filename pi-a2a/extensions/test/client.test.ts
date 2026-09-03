@@ -1,9 +1,7 @@
 import { assert } from "chai";
-import * as path from "node:path";
-import * as fs from "node:fs";
-import * as os from "node:os";
 
 import { DEFAULTS } from "./helpers";
+import { makeTempDir } from "./tmp";
 import {
   a2aCall,
   a2aDiscover,
@@ -65,7 +63,7 @@ function makeResp(body: any, status: number): any {
 }
 
 function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-client-"));
+  return makeTempDir("pi-a2a-client-");
 }
 
 describe("client", () => {

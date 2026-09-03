@@ -1,10 +1,8 @@
 import { assert } from "chai";
-import * as fs from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
-import * as os from "node:os";
-import * as path from "node:path";
 
 import { DEFAULTS } from "./helpers";
+import { makeTempDir } from "./tmp";
 import { A2AServer, type SessionRunner } from "../lib/server";
 import type { A2AConfig } from "../lib/config";
 import { STATE_CANCELED, STATE_COMPLETED, STATE_FAILED, STATE_INPUT_REQUIRED, STATE_REJECTED } from "../lib/protocol";
@@ -22,7 +20,7 @@ function stubRunner(reply = "canned reply"): SessionRunner {
 }
 
 function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-server-"));
+  return makeTempDir("pi-a2a-server-");
 }
 
 /** Pick an ephemeral free port. */

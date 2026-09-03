@@ -1,11 +1,9 @@
 import { assert } from "chai";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
+import { makeTempDir } from "./tmp";
 import { persistMessage, loadConversation, listConversations } from "../lib/persistence";
 
 function tmpDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-persist-"));
+  return makeTempDir("pi-a2a-persist-");
 }
 
 describe("persistence", () => {
