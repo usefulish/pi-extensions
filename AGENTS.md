@@ -25,6 +25,7 @@ into the Pi coding agent, each in its own npm package under `@bacnh85/`.
 | **pi-a2a** | 0.7.6 | A2A Protocol v1.0 bidirectional — Pi distributes tasks to remote agents (Hermes, ADK, LangChain, any A2A peer), exposes itself as an A2A-callable agent, self-declares for local session discovery (file registry + enriched Agent Card + mDNS), registers with **multiple a2a-switchboard gateways** (`discovery.gateways`), shows inbound task activity in the host TUI, and has an interactive config panel. |
 | **pi-config-panel** | 0.1.0 | Shared interactive config-panel kernel (library) — arrow-key toggle/edit overlay panels (`PanelRow`/`PanelGroup` + `ConfigPanelModel` TUI shell) via `ctx.ui.custom`; powers `/a2a-config`, `/commandcode-config`, `/router-config`. |
 | **pi-hub** | 0.1.3 | Interactive installer CLI — `npx @bacnh85/pi-hub` browses the @bacnh85 catalog, searches npm `keywords:pi-package`, multi-selects, and shells out to `pi install`. |
+| **pi-attachments** | 0.2.0 | Image and file attachments — drops/pastes become `[[attach:name]]` chips resolving to readable `📎` path references (images attach as real ImageContent parts; text read on demand). Paste clipboard files with `alt+shift+v`. |
 | **pi-notebooklm** | 0.1.8 | Google NotebookLM — notebooks, sources, chat, research, and Studio artifacts via CLI bridge. |
 | **pi-obsidian** | 0.8.14 | Obsidian vault integration for Pi. |
 | **pi-advisor** | 0.2.0 | OMP-style automatic advisor — a second model reviews each settled turn and injects severity-routed notes (nit card / concern steer, immune-turn cooldown, emission guard), ordered multi-model fallback chain (`pi-advisor.models`, `/advisor models` panel editor); plus the on-demand advisor consult moved from pi-plan. |
@@ -53,6 +54,7 @@ pi-extensions/
   pi-evolve/            # TS extension + lib/buffer+store+inject + skill for trajectory self-learning
   pi-a2a/               # TS extension + lib (protocol/client/server/config/security/persistence/registry/mdns/discovery/activity/config-panel rows) for A2A Protocol v1.0
 pi-config-panel/      # TS library package — shared config-panel kernel (no pi field; consumed as a dependency)
+  pi-attachments/       # TS extension — paste/drag files → 📎 path references + real image attachments
   pi-hub/               # standalone zero-dep CLI (npx @bacnh85/pi-hub) — interactive pi package installer, not loaded by pi
   pi-plan/              # TS extension for plan mode + workflow integration
   pi-advisor/            # TS extension — OMP-style automatic advisor (turn-end reviewer + consult tool)

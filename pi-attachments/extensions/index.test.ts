@@ -1,0 +1,418 @@
+/**
+ * Tests for pi-attachments: path extraction (incl. prose false-positives),
+ * input transform (images, text-file inlining, size cap, no-op, source skip),
+ * and clipboard uri-list parsing.
+ */
+
+import assert from "node:assert/strict";
+import { after, before, describe, it } from "mocha";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { extractImagePaths, extractTextFilePaths } from "./lib/paths";
+import { parseUriList } from "./lib/clipboard-files";
+import { DEFAULTS, loadSettings } from "./lib/settings";
+import { lookup, remember, registryPath } from "./lib/registry";
+import { AttachmentTray } from "./lib/tray";
+import piAttachments from "./index";
+
+const TMP = mkdtempSync(path.join(os.tmpdir(), "pi-attachments-test-"));
+
+// Minimal valid 1x1 PNG (67 bytes, standard test fixture).
+const PNG_BYTES = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+before(() => {
+  // Isolate the persistent token registry (remember()/lookup()) from the real
+  // ~/.pi/agent — tests must never write user-visible state.
+  // NOTE: mocha runs this root before() before every test in the file — keep
+  // registry/env isolation HERE (not in per-describe hooks) so later describes
+  // can't accidentally restore-and-delete the override.
+  mkdirSync(path.join(TMP, "agent"), { recursive: true });
+  process.env.PI_CODING_AGENT_DIR = path.join(TMP, "agent");
+  writeFileSync(path.join(TMP, "shot.png"), PNG_BYTES);
+  writeFileSync(path.join(TMP, "notes.md"), "# Notes\nhello\n");
+  writeFileSync(path.join(TMP, "big.md"), "x".repeat(150_000));
+});
+after(() => {
+  rmSync(TMP, { recursive: true, force: true });
+  delete process.env.PI_CODING_AGENT_DIR;
+});
+
+const img = path.join(TMP, "shot.png");
+const md = path.join(TMP, "notes.md");
+const big = path.join(TMP, "big.md");
+
+describe("extractImagePaths", () => {
+  it("finds existing image paths, deduped", () => {
+    assert.deepEqual(extractImagePaths(`look at ${img} and ${img}`), [img]);
+  });
+
+  it("ignores nonexistent image paths", () => {
+    assert.deepEqual(extractImagePaths("see /tmp/definitely-missing-xyz.png here"), []);
+  });
+
+  it("prose false-positives produce zero matches", () => {
+    assert.deepEqual(extractImagePaths("the .jpg extension is common"), []);
+    assert.deepEqual(extractImagePaths("rename file png to webp"), []);
+    assert.deepEqual(extractImagePaths("output: 'quoted.png' stays unquoted"), []);
+  });
+
+  it("matches paths with escaped spaces (terminal drop form)", () => {
+    const spaced = path.join(TMP, "with space.png");
+    writeFileSync(spaced, PNG_BYTES);
+    const escaped = spaced.replace(/ /g, "\\ "); // Terminal.app pastes "with\ space.png"
+    assert.deepEqual(extractImagePaths(`dropped ${escaped}`), [spaced]);
+  });
+});
+
+describe("extractTextFilePaths", () => {
+  it("finds existing absolute text paths, skips images and missing files", () => {
+    assert.deepEqual(extractTextFilePaths(`read ${md} and ${img} and /no/such/file.md`), [md]);
+  });
+
+  it("never matches relative prose mentions", () => {
+    assert.deepEqual(extractTextFilePaths("see main.rs or src/lib.ts for details"), []);
+  });
+});
+
+describe("parseUriList", () => {
+  it("parses file URIs and percent-decodes spaces", () => {
+    assert.deepEqual(parseUriList("file:///tmp/a%20b.png\r\ncopy\nfile:///tmp/c.md"), ["/tmp/a b.png", "/tmp/c.md"]);
+  });
+
+  it("ignores non-file lines and malformed uris", () => {
+    assert.deepEqual(parseUriList("copy\nhttps://x.com/y\nfile://\nfile:///tmp/ok.md"), ["/tmp/ok.md"]);
+  });
+});
+
+describe("loadSettings", () => {
+  it("returns defaults when settings file is absent", () => {
+    // Don't touch PI_CODING_AGENT_DIR here: the root after() restores it.
+    const saved = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = path.join(TMP, "no-such-dir");
+    try {
+      assert.deepEqual(loadSettings(), DEFAULTS);
+    } finally {
+      if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = saved;
+    }
+  });
+
+  it("reads the attachments key and falls back per-field", () => {
+    const dir = path.join(TMP, "cfg");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ attachments: { maxInlineBytes: 5 } }));
+    const saved = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = dir;
+    try {
+      const s = loadSettings();
+      assert.equal(s.maxInlineBytes, 5);
+      assert.equal(s.inlineTextFiles, DEFAULTS.inlineTextFiles);
+      assert.equal(s.pasteFileShortcut, DEFAULTS.pasteFileShortcut);
+    } finally {
+      if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = saved;
+    }
+  });
+});
+
+describe("registry persistence", () => {
+  it("remember() creates a fresh agent dir and an atomic, parseable registry file", () => {
+    const dir = path.join(TMP, "fresh-agent");
+    const saved = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = dir;
+    try {
+      remember("fresh.md", "/tmp/fresh.md");
+      assert.equal(lookup("fresh.md"), "/tmp/fresh.md");
+      const raw = JSON.parse(readFileSync(registryPath(), "utf-8"));
+      assert.equal(raw["fresh.md"], "/tmp/fresh.md");
+    } finally {
+      if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = saved;
+    }
+  });
+});
+
+describe("AttachmentTray", () => {
+  it("adds, renders, expands, prunes, clears", () => {
+    const tray = new AttachmentTray();
+    const a = tray.add("/tmp/a.png");
+    const b = tray.add("/tmp/b.md");
+    assert.equal(tray.size, 2);
+    assert.equal(a.token, "[[attach:a.png]]");
+    assert.equal(b.token, "[[attach:b.md]]");
+    assert.deepEqual(tray.render(), ["📎 a.png · b.md"]);
+    const expanded = tray.expand(`look ${a.token} and ${b.token}`);
+    assert.equal(expanded, "look /tmp/a.png and /tmp/b.md");
+    assert.deepEqual(tray.resolve(`look ${a.token} and ${b.token}`), [a, b]);
+    tray.prune(`only ${a.token} left`);
+    assert.deepEqual(tray.render(), ["📎 a.png"]);
+    assert.deepEqual(tray.resolve(`${a.token} x`), [a]);
+    tray.clear();
+    assert.equal(tray.size, 0);
+    assert.deepEqual(tray.render(), []);
+  });
+
+  it("same-basename files get unique token names", () => {
+    const tray = new AttachmentTray();
+    const a = tray.add("/tmp/dir1/demo.jpeg");
+    const b = tray.add("/tmp/dir2/demo.jpeg");
+    assert.equal(a.token, "[[attach:demo.jpeg]]");
+    assert.equal(b.token, "[[attach:demo-2.jpeg]]");
+    assert.ok(tray.expand(`${a.token} ${b.token}`).includes("/tmp/dir2/demo.jpeg"));
+  });
+});
+
+describe("input transform", () => {
+  /** Minimal ExtensionAPI double capturing the registered input handler. */
+  function harness() {
+    const handlers: Record<string, Function> = {};
+    const shortcuts: Array<{ shortcut: string; options: any }> = [];
+    const fake = {
+      on: (event: string, handler: Function) => {
+        handlers[event] = handler;
+      },
+      registerShortcut: (shortcut: string, options: any) => shortcuts.push({ shortcut, options }),
+    } as any;
+    piAttachments(fake);
+    return { input: handlers["input"], start: handlers["session_start"], shortcuts };
+  }
+
+  /** Wire session_start (registers terminal-input listener) and capture it. */
+  function harnessWithPaste(h: ReturnType<typeof harness>) {
+    let terminalHandler: Function | undefined;
+    h.start({}, { ui: { onTerminalInput: (fn: Function) => (terminalHandler = fn), setWidget: () => {} } });
+    return (data: string) => terminalHandler?.(data);
+  }
+
+  let inlineDirCounter = 0;
+
+  /** Harness whose piAttachments() sees inlineTextFiles: true via a temp settings dir. */
+  function inlineHarness() {
+    const dir = path.join(TMP, `inline-${inlineDirCounter++}`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, "settings.json"), JSON.stringify({ attachments: { inlineTextFiles: true } }));
+    const saved = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = dir;
+    try {
+      return harness();
+    } finally {
+      if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = saved;
+    }
+  }
+
+  const run = async (
+    h: ReturnType<typeof harness>,
+    text: string,
+    source = "interactive",
+    images?: Array<{ type: "image"; data: string; mimeType: string }>,
+  ) =>
+    (
+      (await h.input(
+        { type: "input", text, source, ...(images ? { images } : {}) },
+        { ui: { getEditorText: () => text, setWidget: () => {} } },
+      )) ?? { action: "continue" }
+    );
+
+  it("converts an existing image path into an ImageContent part", async () => {
+    const result = await run(harness(), `what is in ${img}?`);
+    assert.equal(result.action, "transform");
+    assert.equal(result.images.length, 1);
+    assert.equal(result.images[0].mimeType, "image/png");
+    assert.equal(Buffer.from(result.images[0].data, "base64").length, PNG_BYTES.length);
+    assert.ok(result.text.includes(img)); // path text kept as reference
+  });
+
+  it("inlines small text files as <file> blocks (inlineTextFiles opt-in)", async () => {
+    const result = await run(inlineHarness(), `summarize ${md}`);
+    assert.equal(result.action, "transform");
+    assert.ok(result.text.includes(`<file name="${md}">\n# Notes\nhello\n</file>`));
+    assert.ok(!result.text.includes(`summarize ${md}`));
+  });
+
+  it("default mode: typed text path is left as a bare path (no inline, no token)", async () => {
+    const result = await run(harness(), `summarize ${md}`);
+    assert.equal(result.action, "continue");
+  });
+
+  it("default mode: dropped-text-file token resolves to a 📎 path, no content dump", async () => {
+    remember("cookies.txt", "/Users/bacnh/Downloads/medium.com_cookies.txt");
+    const h = harness();
+    const result = await run(h, `what is in [[attach:cookies.txt]] ?`);
+    assert.equal(result.action, "transform");
+    assert.ok(result.text.includes("📎 /Users/bacnh/Downloads/medium.com_cookies.txt"));
+    assert.ok(!result.text.includes("<file"), "no content block");
+    assert.ok(!result.text.includes("[[attach:"), "token resolved");
+  });
+
+  it("substring paths don't corrupt each other (inline mode)", async () => {
+    const bak = md + ".bak";
+    writeFileSync(bak, "backup content\n");
+    const result = await run(inlineHarness(), `compare ${md} with ${bak}`);
+    assert.equal(result.action, "transform");
+    assert.ok(result.text.includes(`<file name="${md}">`), "shorter path inlined");
+    assert.ok(result.text.includes(`<file name="${bak}">`), "longer path inlined intact");
+    assert.ok(result.text.includes("backup content"));
+    const blocks = result.text.match(/<file name="[^"]+">[\s\S]*?<\/file>/g) ?? [];
+    assert.equal(blocks.length, 2, "exactly two blocks, no nesting");
+  });
+
+  it("skips text files over the size cap (inline mode)", async () => {
+    const result = await run(inlineHarness(), `read ${big}`);
+    assert.equal(result.action, "continue");
+    assert.ok(!result.text?.includes("<file"), "oversized file is not inlined");
+  });
+
+  it("no-op for plain prose", async () => {
+    assert.equal((await run(harness(), "hello there, no paths here")).action, "continue");
+  });
+
+  it("skips extension-sourced input", async () => {
+    const h = harness();
+    assert.ok(!(await h.input({ type: "input", text: `check ${img}`, source: "extension" }, {} as any)));
+  });
+
+  it("token from a PREVIOUS session resolves via the persistent registry", async () => {
+    // Simulate: file dropped in an earlier session (registry written), tray now empty.
+    remember("custom-footer.ts", "/Users/bacnh/Downloads/custom-footer.ts");
+    assert.equal(lookup("custom-footer.ts"), "/Users/bacnh/Downloads/custom-footer.ts");
+
+    // Fresh extension load (new session) — tray is empty but registry knows the file.
+    const h = harness();
+    const result = await run(h, "what is [[attach:custom-footer.ts]] ?");
+    assert.equal(result.action, "transform");
+    assert.ok(result.text.includes("/Users/bacnh/Downloads/custom-footer.ts"), "token expanded via registry");
+    assert.ok(!result.text.includes("[[attach:"), "no dead token left");
+  });
+
+  it("registers the paste-file shortcut", () => {
+    const h = harness();
+    assert.equal(h.shortcuts.length, 1);
+    assert.equal(h.shortcuts[0].shortcut, DEFAULTS.pasteFileShortcut);
+  });
+
+  it("path-only bracketed paste is rewritten to attachment tokens", () => {
+    const h = harness();
+    const onPaste = harnessWithPaste(h);
+    const result = onPaste("\x1b[200~/tmp/a.png /tmp/b.md\x1b[201~") as any;
+    assert.ok(result?.data);
+    const tokens = result.data.split(" ");
+    assert.equal(tokens.length, 2);
+    assert.match(tokens[0], /^\[\[attach:[^\]]+\]\]$/);
+    // tokens expand back to real paths at submit → images/text inline as usual
+  });
+
+  it("mixed text paste passes through untouched", () => {
+    const h = harness();
+    const onPaste = harnessWithPaste(h);
+    assert.equal(onPaste("\x1b[200~hello world /tmp\x1b[201~"), undefined);
+    assert.equal(onPaste("plain keys"), undefined);
+  });
+
+  it("token flow: pasted tokens expand to real content at submit", async () => {
+    const h = harness();
+    const onPaste = harnessWithPaste(h);
+    const pasted = onPaste(`\x1b[200~${img}\x1b[201~`) as any;
+    const token = pasted.data.trim();
+    const result = await run(h, `what is ${token}?`);
+    assert.equal(result.action, "transform");
+    assert.equal(result.images.length, 1);
+    assert.ok(result.text.includes(img), "expanded to the real path");
+    assert.ok(!result.text.includes(token), "token replaced");
+  });
+
+  it("escaped-space path drop becomes a token and resolves to the real path", async () => {
+    const spaced = path.join(TMP, "with space.png");
+    writeFileSync(spaced, PNG_BYTES);
+    const escaped = spaced.replace(/ /g, "\\ "); // Terminal.app drop form
+    const h = harness();
+    const onPaste = harnessWithPaste(h);
+    const pasted = onPaste(`\x1b[200~${escaped}\x1b[201~`) as any;
+    assert.equal(pasted.data, "[[attach:with space.png]]");
+    const result = await run(h, `what is ${pasted.data}?`);
+    assert.equal(result.action, "transform");
+    assert.equal(result.images.length, 1);
+    assert.ok(result.text.includes(spaced), "token resolved to the unescaped path");
+  });
+
+  it("same image via two tokens is attached only once", async () => {
+    const h = harness();
+    const onPaste = harnessWithPaste(h);
+    const pasted = onPaste(`\x1b[200~${img} ${img}\x1b[201~`) as any;
+    const [t1, t2] = pasted.data.split(" ");
+    assert.notEqual(t1, t2, "second drop gets a unique token");
+    const result = await run(h, `${t1} ${t2}`);
+    assert.equal(result.action, "transform");
+    assert.equal(result.images.length, 1, "duplicate path attached once");
+    assert.equal((result.text.match(/📎/g) ?? []).length, 2, "both tokens replaced by the path chip");
+  });
+
+  it("preserves pre-existing event images when adding discovered ones", async () => {
+    const prior = { type: "image" as const, data: "UVp", mimeType: "image/png" };
+    const result = await run(harness(), `what is in ${img}?`, "interactive", [prior]);
+    assert.equal(result.action, "transform");
+    assert.equal(result.images.length, 2);
+    assert.equal(result.images[0].data, "UVp", "original event image kept first");
+    assert.equal(result.images[1].mimeType, "image/png", "discovered image appended");
+  });
+
+  it("escaped-space text path is inlined like its image counterpart (inline mode)", async () => {
+    const spaced = path.join(TMP, "with space.md");
+    writeFileSync(spaced, "spaced content\n");
+    const escaped = spaced.replace(/ /g, "\\ ");
+    const result = await run(inlineHarness(), `summarize ${escaped}`);
+    assert.equal(result.action, "transform");
+    assert.ok(result.text.includes(`<file name="${spaced}">\nspaced content\n</file>`));
+  });
+});
+
+describe("attachment removal flow", () => {
+  function fullHarness() {
+    const handlers: Record<string, Function> = {};
+    let widget: string[] | null = null;
+    let pasteHandler: Function | undefined;
+    let editorText = "";
+    const ui = {
+      onTerminalInput: (fn: Function) => { pasteHandler = fn; },
+      setWidget: (_key: string, lines: string[]) => { widget = lines; },
+      getEditorText: () => editorText,
+    };
+    piAttachments({ on: (e: string, h: Function) => { handlers[e] = h; }, registerShortcut: () => {} } as any);
+    handlers["session_start"]({}, { ui });
+    return {
+      paste: (data: string) => pasteHandler?.(data),
+      type: (t: string) => { editorText = t; pasteHandler?.("x"); }, // any keystroke syncs
+      submit: () => handlers["input"]({ type: "input", text: editorText, source: "interactive" }, { ui }),
+      get widget() { return widget; },
+    };
+  }
+
+  it("deleting a token from the prompt removes its chip and its attachment", async () => {
+    writeFileSync("/tmp/rm-a.png", PNG_BYTES);
+    writeFileSync("/tmp/rm-b.txt", "b\n");
+    const h = fullHarness();
+
+    const pasted: any = h.paste("\x1b[200~/tmp/rm-a.png /tmp/rm-b.txt\x1b[201~");
+    const tokenA = pasted.data.split(" ")[0];
+    const tokenB = pasted.data.split(" ")[1];
+    h.type(pasted.data);
+    assert.ok(h.widget![0].includes("·"), "both chips shown");
+
+    // user deletes the second token → next keystroke prunes its chip
+    h.type(`${tokenA} look`);
+    assert.equal(h.widget!.length, 1, "single chip line");
+    assert.ok(h.widget![0].includes("rm-a.png"));
+    assert.ok(!h.widget![0].includes("rm-b.txt"), "removed chip is gone");
+
+    // submit sends only the surviving image
+    const result: any = await h.submit();
+    assert.equal(result.images.length, 1);
+    assert.ok(!result.text.includes("rm-b"), "removed file is not attached");
+    assert.ok(!result.text.includes(tokenB), "removed token is gone");
+  });
+});
