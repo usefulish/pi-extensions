@@ -78,10 +78,10 @@ Edit `~/.pi/agent/settings.json` under the `a2a` key. Key reference:
 | `server.peerTokens` | `{}` | Per-peer token directory `name → token` (unique identities) |
 | `server.trustedPeers` | `[]` | Allow-list of authenticated identities |
 | `server.allowAllUsers` | `false` | Allow any authenticated peer (dev only) |
-| `server.maxConcurrent` | `3` | Max concurrent inbound tasks |
-| `server.replyTimeoutSec` | `300` | Seconds to wait for the agent's reply |
 | `server.childTranscripts` | `true` | Persist each dispatched child session's transcript to `<agentDir>/a2a_sessions/<timestamp>_<taskId>.jsonl` (a real pi session file, openable with pi's session tooling) so stalled/killed workers leave a forensic step history. Off = stock in-memory children |
 | `server.childTranscriptRetentionDays` | `30` | Delete child transcripts older than N days on server start. `0` = keep forever. Transcripts carry everything the worker read — keep the window bounded |
+| `server.maxConcurrent` | `3` | Max concurrent inbound tasks (blocking **and** detached — see the operator note under [Non-blocking dispatch](#non-blocking-dispatch-returnimmediately)) |
+| `server.replyTimeoutSec` | `300` | Seconds to wait for the agent's reply on a blocking send. `0` = no reply-window timer (unbounded — the request stays open until the run settles; deliberate, rare) |
 | `server.asyncTimeoutSec` | `86400` | Supervision window (seconds) for **detached** tasks sent with `returnImmediately` — the caller's request already returned an ack, so this bound replaces the reply window. `0` = unbounded (caller-supervised via `tasks/get` / `tasks/cancel`) |
 | `server.maxPingpongTurns` | `5` | Anti-loop turn cap per context (max 20) |
 | `server.rateLimitPerMin` | `60` | Requests/minute per identity |
@@ -172,7 +172,7 @@ on an inbound agent server on whoever opens it. (`portFallback: 0` means
 | `A2A_ALLOW_ALL_USERS` | `false` | Allow any authenticated peer (dev only) |
 | `A2A_RATE_LIMIT` | `60` | Requests/minute per identity |
 | `A2A_MAX_PINGPONG_TURNS` | `5` | Anti-loop turn cap per context (max 20) |
-| `A2A_REPLY_TIMEOUT` | `300` | Seconds to wait for the agent's reply |
+| `A2A_REPLY_TIMEOUT` | `300` | Seconds to wait for the agent's reply (`0` = unbounded: no reply-window timer) |
 | `A2A_ASYNC_TIMEOUT` | `86400` | Detached-task supervision window in seconds (`0` = unbounded) — see [Non-blocking dispatch](#non-blocking-dispatch-returnimmediately) |
 | `A2A_SERVER_ENABLED` | `false` | Auto-start the inbound server on session start |
 | `A2A_SELF_IDENTITY` | _(unset)_ | Outbound caller identity: a key in `server.peerTokens`. When set, this session presents its OWN per-peer token (not the shared token) so receivers attribute calls to it uniquely. Empty = use the shared token (anonymous caller). |
@@ -514,6 +514,17 @@ a2a_status(agent="worker", task_id="task-1b4f…", wait_seconds=300)  # poll unt
   ones, and overflow is supervised by `server.asyncTimeoutSec` (default
   24h, `0` = unbounded/caller-supervised) → `TASK_STATE_FAILED` with a
   descriptive status message, mirroring the reply-window semantics.
+- **Operator note — a detached run pins a concurrency slot for its whole
+  lifetime.** The gate runs *before* the blocking/detached split, and a
+  detached run holds its `maxConcurrent` slot from the ack until it reaches
+  a terminal state — up to `asyncTimeoutSec` (24h by default) each. Three
+  slow or hung detached dispatches at the default `maxConcurrent: 3`
+  therefore block **all** inbound work — blocking `message/send` included
+  (`server busy`) — until they drain. Levers: keep `asyncTimeoutSec` as low
+  as your longest legitimate detached job (it is the kill switch that frees
+  the slot), raise `maxConcurrent` if you routinely dispatch long jobs, and
+  `tasks/cancel` a stuck task to free its slot immediately. (A separate
+  `maxDetached` budget is a plausible follow-up.)
 - `returnImmediately` has **no effect on `message/stream`** (per §3.2.2) —
   streaming keeps its blocking semantics.
 - The snake_case spelling `return_immediately` is accepted for early

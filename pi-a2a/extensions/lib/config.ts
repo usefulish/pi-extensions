@@ -118,6 +118,10 @@ export interface A2AConfig {
     host: string;
     workspace: string;
     maxConcurrent: number;
+    /** Blocking-send supervision window in seconds — the HTTP request stays
+     *  open at most this long. 0 = no reply-window timer (unbounded): the
+     *  request stays open until the run settles. Deliberate, rare — same 0
+     *  semantics as asyncTimeoutSec. */
     replyTimeoutSec: number;
     /** Supervision window for detached (returnImmediately) tasks, in seconds.
      *  The caller's HTTP request already returned an ACK, so the reply window
@@ -231,8 +235,12 @@ function parseDotEnv(text: string): Record<string, string> {
  * cwd→root `.env.local` walk: a coding agent opens attacker-controlled repos,
  * so repo files must not be able to enable the server, widen the bind,
  * install tokens, or redirect the gateway (see loadEnv).
+ *
+ * Exported for the env/settings parity test: the set must cover the same
+ * server abuse-control surface that sanitizeRepoA2ASettings strips from
+ * repo-controlled settings.json.
  */
-const SECURITY_ENV_KEYS: ReadonlySet<string> = new Set([
+export const SECURITY_ENV_KEYS: ReadonlySet<string> = new Set([
   "A2A_SERVER_ENABLED",
   "A2A_HOST",
   "A2A_BEARER_TOKEN",
@@ -241,8 +249,16 @@ const SECURITY_ENV_KEYS: ReadonlySet<string> = new Set([
   "A2A_ALLOW_ALL_USERS",
   "A2A_MAX_PINGPONG_TURNS",
   "A2A_RATE_LIMIT",
-  "A2A_CHILD_TRANSCRIPTS",
+"A2A_CHILD_TRANSCRIPTS",
   "A2A_CHILD_TRANSCRIPT_RETENTION_DAYS",
+  // Abuse-control parity with sanitizeRepoA2ASettings ("maxConcurrent",
+  // "replyTimeoutSec", "asyncTimeoutSec"): a repo must not be able to raise
+  // the concurrency ceiling or stretch either supervision window
+  // (asyncTimeoutSec 0 = unbounded; a huge window pins maxConcurrent slots
+  // for the whole window).
+  "A2A_MAX_CONCURRENT",
+  "A2A_REPLY_TIMEOUT",
+  "A2A_ASYNC_TIMEOUT",
   "A2A_VERIFY_SSL",
   "A2A_DISCOVERY_MDNS",
   "A2A_ENRICH_CARD",
@@ -282,7 +298,6 @@ export function loadEnv(cwd: string): Record<string, string> {
       /* ignore */
     }
   }
-  const paths = envCandidates(cwd).reverse();
   // Walk from filesystem root up to cwd so cwd wins — but NEVER let a
   // repo-controlled .env.local set security-relevant keys (a coding agent
   // opens attacker-controlled repos; those files must not be able to enable
@@ -291,6 +306,7 @@ export function loadEnv(cwd: string): Record<string, string> {
   // that re-parse is deliberately NOT skipped — its security keys were already
   // merged above and delete-from-copy here cannot remove them. Keep the global
   // read FIRST: it is the only place repo keys could ever be overridden back.
+  const paths = envCandidates(cwd).reverse();
   for (const p of paths) {
     try {
       const parsed = parseDotEnv(readFileSync(p, "utf-8"));

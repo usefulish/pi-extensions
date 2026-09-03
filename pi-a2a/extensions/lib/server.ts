@@ -959,7 +959,36 @@ export class A2AServer {
     // session is no longer bounded by the caller's reply window (detached
     // runs are supervised by server.asyncTimeoutSec instead).
     const execution = this.executeTask(st, identity, inboundText, returnImmediately);
-    if (returnImmediately) return st.task;
+    if (returnImmediately) {
+      // The detached run continues after this reply returns; nothing else
+      // will ever await `execution`. executeTask never rejects by contract
+      // (every failure is classified into the task state), but that is
+      // discipline, not a type guarantee — a throw on a path outside its
+      // try/catch (a store update, an activity callback, an OOM) would be an
+      // UNOBSERVED rejection that takes the process down (Node's default).
+      // Observe the promise and contain an unexpected throw: best-effort
+      // mark the task FAILED (redacted) so a poller sees the truth instead
+      // of WORKING forever, and never rethrow — this catch is the last
+      // observer of the promise.
+      execution.catch((e) => {
+        try {
+          if (!st.done) {
+            this.store.update(taskId, (t) => {
+              t.status.state = STATE_FAILED;
+              t.status.message = {
+                role: "ROLE_AGENT",
+                parts: [{ text: redactOutbound(`internal error: ${e?.message ?? String(e)}`), mediaType: "text/plain" }],
+                messageId: newContextId(),
+              };
+            });
+            st.done = true;
+          }
+        } catch {
+          /* containment is best-effort */
+        }
+      });
+      return st.task;
+    }
     return execution;
   }
 
@@ -984,23 +1013,34 @@ export class A2AServer {
     // after the suite/server is done (the runner rejects, no abort fires,
     // nothing clears it: with the 86400s async default that is a full day).
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Local ground truth for "this run was killed by OUR supervision timer",
+    // set in the timer callback BEFORE the abort so it can never disagree
+    // with the timer. The catch path keys the supervision classification on
+    // this flag, never on the abort reason's TEXT — prefix-matching
+    // "reply timeout" would let any future abort site (or runner error) with
+    // that wording masquerade as a supervision kill.
+    let timedOut = false;
     try {
       // Blocking runs are bounded by the reply window (the HTTP request is
       // holding the caller hostage). Detached runs are bounded by the async
-      // window instead — 0 disables the timer entirely (caller-supervised).
+      // window instead. 0 disables the timer for BOTH windows, documented as
+      // "unbounded / caller-supervised": for the async window that is the
+      // deliberate submit-and-poll contract, and for the reply window it
+      // replaces the pre-async-dispatch degenerate reading of
+      // setTimeout(…, 0) — "instant timeout on every task" — which no
+      // working configuration can have depended on.
       const timeoutSec = detached ? this.cfg.server.asyncTimeoutSec : this.cfg.server.replyTimeoutSec;
       if (timeoutSec > 0) {
-        timer = setTimeout(
-          () =>
-            controller.abort(
-              new Error(
-                detached
-                  ? `async timeout: exceeded the ${timeoutSec}s detached-task window — session aborted mid-run, result is truncated`
-                  : "reply timeout",
-              ),
+        timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort(
+            new Error(
+              detached
+                ? `async timeout: exceeded the ${timeoutSec}s detached-task window — session aborted mid-run, result is truncated`
+                : "reply timeout",
             ),
-          timeoutSec * 1000,
-        );
+          );
+        }, timeoutSec * 1000);
         // Clear on abort too: a runner that ignores its signal and never
         // settles must not hold the process alive until the timer fires.
         controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
@@ -1058,19 +1098,17 @@ export class A2AServer {
       const aborted = controller.signal.aborted;
       // Distinguish user-initiated cancel (CANCELED) from system timeout/failure (FAILED).
       const state = aborted && st.userCanceled ? STATE_CANCELED : STATE_FAILED;
-      this.auditTranscript(taskId, identity, (e as any)?.transcriptPath, (e as any)?.stepCount);
-      // A supervision timeout's ground truth is the abort REASON (it carries
-      // the descriptive "reply/async timeout: exceeded the Ns window …"
-      // text), not whatever error the runner happened to throw when the
-      // abort landed — a runner may reject with its own error and lose the
-      // classification. Prefer the reason only for our own timeout aborts:
-      // client-disconnect aborts carry a generic AbortError, and cancels are
-      // classified above.
+this.auditTranscript(taskId, identity, (e as any)?.transcriptPath, (e as any)?.stepCount);
+      // A supervision timeout's ground truth is the local `timedOut` flag
+      // (set by OUR timer callback), never the abort reason's TEXT — the
+      // reason carries the descriptive "reply/async timeout: … the Ns window"
+      // message we abort with, and a runner rejecting with its own error
+      // must not be able to spoof that wording into a supervision
+      // classification. Client-disconnect aborts carry a generic AbortError,
+      // and cancels are classified above (userCanceled). timedOut implies
+      // aborted — the flag is set only in the callback that aborts.
       const reason = controller.signal.reason;
-      const reasonMsg =
-        aborted && !st.userCanceled && reason instanceof Error && /^(reply|async) timeout/.test(reason.message)
-          ? reason.message
-          : undefined;
+      const reasonMsg = timedOut && !st.userCanceled && reason instanceof Error ? reason.message : undefined;
       this.store.update(taskId, (t) => {
         // Don't clobber a cancel-handler-set CANCELED state with an error message.
         t.status.state = state;
@@ -1106,7 +1144,6 @@ export class A2AServer {
       }
       return st.task;
     } finally {
-      if (replyTimer !== undefined) clearTimeout(replyTimer);
       this.running -= 1;
       // The run settled (completed or classified) — the supervision timer's
       // job is done. Without this, a FAILED run whose runner threw its own

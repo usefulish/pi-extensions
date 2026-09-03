@@ -548,12 +548,12 @@ export default function a2aExtension(pi: ExtensionAPI): void {
       }),
       wait_seconds: Type.Optional(
         Type.Number({
-          description: "If set, poll until the task is terminal or this many seconds pass. " +
-          "Omit for a single status fetch.",
+          description: "If positive, poll until the task is terminal or this many seconds pass. " +
+          "Omit (or 0/negative) for a single status fetch.",
         }),
       ),
     }),
-    execute: async (_id, args, _signal, _onUpdate, ctx) => {
+    execute: async (_id, args, signal, _onUpdate, ctx) => {
       const cfg = cfgFor(ctx);
       return {
         content: [
@@ -566,6 +566,7 @@ export default function a2aExtension(pi: ExtensionAPI): void {
               taskId: String(args.task_id ?? ""),
               waitSeconds: typeof args.wait_seconds === "number" ? args.wait_seconds : undefined,
               discoveredPeers: listPeers({ cfg, piDir: piDir(), mdnsPeers: server?.discoveredMdnsPeers ?? [], selfUrl: server?.url ?? "", gatewayPeers: getGatewayPeers() }),
+              signal: signal ?? undefined,
             }),
           },
         ],
