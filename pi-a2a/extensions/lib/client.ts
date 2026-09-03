@@ -339,6 +339,15 @@ async function sendTask(opts: {
 }): Promise<SendResult> {
   const { cfg, piDir, peer, agentLabel, message } = opts;
   const headers = authHeaders(peer);
+  // Asserted sender identity (X-A2A-Identity): lets the receiving peer
+  // attribute this dispatch to a NAME (e.g. "pi-kimchi") instead of the
+  // caller's address — behind a reverse proxy every caller shares the
+  // proxy's loopback address, so address attribution cannot tell agents
+  // apart. Advisory display provenance only, mirroring the "pi/self"
+  // message metadata below: the receiver's own trust gates decide whether
+  // to honor it — never authentication. Unset identity → header omitted.
+  const self = cfg.selfIdentity || cfg.server.agentName;
+  if (self) headers["X-A2A-Identity"] = self;
   // Advisory caller attribution for the gateway's routing log/dashboard.
   // Self-declared display name — stripped by the gateway before forwarding.
   if (peer.viaGateway) {

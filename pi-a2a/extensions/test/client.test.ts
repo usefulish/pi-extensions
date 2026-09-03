@@ -165,6 +165,60 @@ describe("client", () => {
       assert.isUndefined(seenHeaders["X-Gateway-Caller"]);
     });
 
+    it("sends the asserted X-A2A-Identity header from selfIdentity", async () => {
+      const result = { task: { id: "t", contextId: "c", status: { state: STATE_COMPLETED }, artifacts: [{ parts: [{ text: "ok" }] }] } };
+      let seenHeaders: Record<string, string> = {};
+      globalThis.fetch = (async (_url: string, init?: any) => {
+        seenHeaders = { ...(init?.headers || {}) };
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result }),
+        };
+      }) as any;
+      const cfg = DEFAULTS();
+      cfg.selfIdentity = "pi-kimchi";
+      cfg.peers.bob = { url: "http://b", auth: { type: "none" }, timeout: 5000, capabilities: [] };
+      const out = await a2aCall({ cfg, piDir, agent: "bob", message: "hi" });
+      assert.include(out, "ok");
+      assert.equal(seenHeaders["X-A2A-Identity"], "pi-kimchi");
+    });
+
+    it("falls back to server.agentName for X-A2A-Identity", async () => {
+      const result = { task: { id: "t", contextId: "c", status: { state: STATE_COMPLETED }, artifacts: [{ parts: [{ text: "ok" }] }] } };
+      let seenHeaders: Record<string, string> = {};
+      globalThis.fetch = (async (_url: string, init?: any) => {
+        seenHeaders = { ...(init?.headers || {}) };
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result }),
+        };
+      }) as any;
+      const cfg = DEFAULTS();
+      cfg.server.agentName = "pi-bingsu"; // selfIdentity unset
+      cfg.peers.bob = { url: "http://b", auth: { type: "none" }, timeout: 5000, capabilities: [] };
+      await a2aCall({ cfg, piDir, agent: "bob", message: "hi" });
+      assert.equal(seenHeaders["X-A2A-Identity"], "pi-bingsu");
+    });
+
+    it("omits X-A2A-Identity when no identity is configured", async () => {
+      const result = { task: { id: "t", contextId: "c", status: { state: STATE_COMPLETED }, artifacts: [{ parts: [{ text: "ok" }] }] } };
+      let seenHeaders: Record<string, string> = {};
+      globalThis.fetch = (async (_url: string, init?: any) => {
+        seenHeaders = { ...(init?.headers || {}) };
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ jsonrpc: "2.0", id: 1, result }),
+        };
+      }) as any;
+      const cfg = DEFAULTS(); // selfIdentity and server.agentName both ""
+      cfg.peers.bob = { url: "http://b", auth: { type: "none" }, timeout: 5000, capabilities: [] };
+      await a2aCall({ cfg, piDir, agent: "bob", message: "hi" });
+      assert.isUndefined(seenHeaders["X-A2A-Identity"]);
+    });
+
     it("falls back to the runtime gateway registration name for X-Gateway-Caller", async () => {
       const result = { task: { id: "t", contextId: "c", status: { state: STATE_COMPLETED }, artifacts: [{ parts: [{ text: "ok" }] }] } };
       let seenHeaders: Record<string, string> = {};
