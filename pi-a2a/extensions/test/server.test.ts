@@ -999,6 +999,57 @@ describe("server", () => {
     });
   });
 
+  describe("stunted length-stop reply is not COMPLETED", () => {
+    // A context-clamped turn ends with stopReason "length" and no assistant
+    // text (max_tokens squeezed to the remaining context, the model emits
+    // almost nothing). The session runner now throws for such a turn — the
+    // alternative is returning the PREVIOUS turn's text normally, which
+    // takes messageSend's success path: the task completes with a stale
+    // mid-work reply and a dispatcher cannot tell a dead worker from a
+    // finished one. These tests lock the classification the contract
+    // depends on: the throw maps to FAILED with a status message and no
+    // reply artifact.
+    const stuntedRunner: SessionRunner = async () => {
+      throw new Error(
+        "run ended on a length stop with no assistant text — no usable reply was produced (output capped before any content; context-clamped max_tokens?)",
+      );
+    };
+
+    it("maps a length-stop-no-text turn to STATE_FAILED with a status message", async () => {
+      const events: any[] = [];
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: stuntedRunner, onActivity: (a) => events.push(a) });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        assert.equal(r.result.status.state, STATE_FAILED);
+        const msgText = r.result.status.message?.parts?.[0]?.text ?? "";
+        assert.include(msgText, "no usable reply", "status message explains the stunted turn");
+        assert.isUndefined(r.result.artifacts, "a stunted turn carries no reply artifact");
+        // The host toast must say failed — not "completed (Ns)".
+        assert.deepEqual(events.map((e) => e.type), ["arrived", "failed"]);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("does not count the stunted turn as completed in metrics", async () => {
+      const before = metrics.tasksCompleted;
+      const beforeFailed = metrics.tasksFailed;
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: stuntedRunner });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        assert.equal(r.result.status.state, STATE_FAILED);
+        assert.equal(metrics.tasksCompleted, before, "stunted turns never increment completions");
+        assert.equal(metrics.tasksFailed, beforeFailed + 1, "stunted turns increment failures");
+      } finally {
+        await stop();
+      }
+    });
+  });
+
   describe("port fallback (EADDRINUSE → next port)", () => {
     /** Pre-bind the configured port so the A2A server must fall back. */
     async function holdPort(port: number): Promise<() => Promise<void>> {

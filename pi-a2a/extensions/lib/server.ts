@@ -167,6 +167,13 @@ class RateLimiter {
 // Session runner — the injectable boundary for testing
 // ---------------------------------------------------------------------------
 
+/**
+ * Contract: a normal return asserts the turn finished (or needs input) —
+ * in particular, that the final assistant message carried usable text. A
+ * turn that ends on a length stop with no assistant text produced no usable
+ * reply and MUST throw, so messageSend maps the task to FAILED instead of
+ * completing it with the previous turn's stale text.
+ */
 export interface SessionRunner {
   (opts: {
     message: string;

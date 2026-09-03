@@ -60,8 +60,23 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
     const model = ctx.model;
     if (!model) throw new Error("no active model on the host session");
     const cwd = ctx.cwd || process.cwd();
+    // Auto-compaction is the only recovery path a long dispatch has near
+    // the context window: pi clamps max_tokens to the remaining budget
+    // (down to 1 at the extreme), so without compact-and-retry the final
+    // turn is cut and the task dies with a truncated or empty reply. The
+    // keep window is scaled to the model's context window (stock: flat
+    // 20k) because pi's cut-point walk never cuts at tool results — a
+    // single tool-result batch bigger than the keep budget strands the
+    // walk and auto-compaction silently no-ops exactly when it is most
+    // needed. Dispatched coding tasks routinely produce such batches (one
+    // large read or command dump), so the keep budget needs headroom
+    // proportional to the window.
+    const keepRecentTokens = Math.max(
+      20_000,
+      Math.floor((model.contextWindow ?? 128_000) / 5),
+    );
     const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: false },
+      compaction: { enabled: true, keepRecentTokens },
       retry: { enabled: true, maxRetries: 1 },
     });
     // The loader must NOT receive the inMemory settingsManager: it would then
@@ -109,6 +124,10 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
     }
     let reply = "";
     let inputRequired = false;
+    // Stop reason of the LAST assistant message and whether it carried any
+    // text — consumed by the stunted-reply check after the run completes.
+    let terminalStopReason: string | undefined;
+    let terminalHadText = false;
     let resolveDone!: () => void;
     const done = new Promise<void>((r) => (resolveDone = r));
     const unsub = session.subscribe((event: any) => {
@@ -126,15 +145,19 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
           .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
           .join("");
         if (text) reply = text;
+        terminalStopReason = event.message?.stopReason;
+        terminalHadText = Boolean(text);
         if (/\[INPUT_REQUIRED\]/i.test(reply)) {
           inputRequired = true;
           reply = reply.replace(/\[INPUT_REQUIRED\]\s*/gi, "").trim();
         }
-      } else if (event.type === "agent_end" && !event.willRetry) {
-        resolveDone();
       }
     });
     const onAbort = () => {
+      // Settle the race (see the prompt race below) so a prompt() that
+      // outlives session.abort() cannot hang the runner past the server's
+      // reply window.
+      resolveDone();
       try {
         session.abort();
       } catch {
@@ -143,6 +166,16 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
     };
     signal.addEventListener("abort", onAbort, { once: true });
     try {
+      // Settle the race on prompt() completion, not on agent_end: agent_end
+      // fires when the model turn ends — BEFORE the post-run overflow
+      // recovery that prompt() awaits (agent-session's _handlePostAgentRun
+      // → compact-and-retry). Settling at agent_end let the cleanup below
+      // dispose() the session while that recovery compaction was still in
+      // flight (dispose → abortCompaction), so a context-clamped turn could
+      // never recover even though pi's compact-and-retry would have saved
+      // it. prompt() resolves only after recovery and any continuation
+      // turns finish; aborts still settle the race immediately via onAbort
+      // above.
       await Promise.race([session.prompt(message), done]);
     } finally {
       signal.removeEventListener("abort", onAbort);
@@ -162,6 +195,17 @@ function makeSessionRunner(ctx: ExtensionContext): SessionRunner {
       } catch {
         /* ignore */
       }
+    }
+    if (terminalStopReason === "length" && !terminalHadText) {
+      // A length stop with no assistant text means the provider capped
+      // output before any usable content — typically max_tokens clamped
+      // against the context estimate. `reply` still holds the PREVIOUS
+      // turn's text, so returning normally would report the task COMPLETED
+      // with a stale mid-work answer. Throw so the task maps to FAILED —
+      // a dispatcher must not mistake this for a finished worker.
+      throw new Error(
+        "run ended on a length stop with no assistant text — no usable reply was produced (output capped before any content; context-clamped max_tokens?)",
+      );
     }
     return { reply: reply || "(no reply)", inputRequired };
   };

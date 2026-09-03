@@ -432,6 +432,15 @@ pi-mcp-extension's MCP servers — are available to the dispatched agent, and
 are cleaned up. The child never touches the host's own inbound server:
 server lifecycle handlers are host-session-only.
 
+Long dispatches run with **auto-compaction enabled** and a keep window scaled
+to the model's context window, and the runner waits for the session's
+post-run recovery before reporting completion. Without that, a task that
+grows near the context window dies misleadingly: pi clamps `max_tokens` to
+what remains (down to 1), the model's final turn ends on a length stop with
+no text, and the task would otherwise complete with the *previous* turn's
+stale reply. Such a turn now fails the task (`FAILED`, status message
+"no usable reply was produced") instead of masquerading as success.
+
 ## Hermes interop
 
 The primary interop target. Hermes (`~/.hermes/hermes-agent`, A2A platform
