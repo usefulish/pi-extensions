@@ -319,6 +319,24 @@ Or per-terminal via env: `A2A_SELF_IDENTITY=session-a`.
 - Sessions still reach each other: A presents `tokenA`, B's server looks it up
   → identity `session-a`; no caller needs anyone else's token.
 
+### Outbound asserted identity (X-A2A-Identity)
+
+Every outbound peer request carries the caller's configured identity
+(`selfIdentity`, falling back to `server.agentName`) as an
+`X-A2A-Identity` header, in addition to the `pi/self` message metadata. The
+use case: when peers live behind a reverse proxy (or on other machines
+reached through one), every caller arrives from the proxy's address —
+`ip:127.0.0.1` tells the receiver nothing about WHICH agent dispatched. The
+header lets a receiving peer's audit log attribute the call to a name
+(`pi-kimchi`, `librarian-bingsu`, …) instead of the address.
+
+- **Asserted display provenance, never authentication.** Any client can send
+  any name; a receiving server must only use it to refine the display name of
+  a caller it has ALREADY admitted (e.g. an authenticated shared-token
+  caller), never to grant admission or override a token-authenticated
+  identity. Receivers that don't know the header simply ignore it.
+- The header is omitted when no identity is configured (both empty).
+
 ### Inbound activity in the host TUI (0.3.0)
 
 When a remote peer sends Pi an A2A task, the **host session** now shows what's
@@ -405,6 +423,9 @@ and **UI** (transcript toggle).
   untrusted peer input. Remote peers cannot invoke operator slash commands.
 - **Outbound redaction** — credential-shaped strings (API keys, JWTs, tokens,
   emails) are scrubbed from replies before they leave.
+- **Asserted identity is display-only** — the `X-A2A-Identity` header sent
+  outbound names the caller for attribution; it is self-reported, carries no
+  credential, and must never be trusted for admission on the receiving side.
 - **Untrusted metadata sanitized** — mDNS TXT records and registry files are
   network/world-readable input; peer names/cwd/model are sanitized
   (single-line, length-capped) before display.
