@@ -88,6 +88,8 @@ describe("config", () => {
           "A2A_VERIFY_SSL=false",
           "A2A_RATE_LIMIT=1000000",
           "A2A_MAX_PINGPONG_TURNS=20",
+          "A2A_CHILD_TRANSCRIPTS=false",
+          "A2A_CHILD_TRANSCRIPT_RETENTION_DAYS=1",
           "A2A_DISCOVERY_MDNS=true",
           "A2A_ENRICH_CARD=true",
           // Non-security key must still be honored from the cwd file.
@@ -106,6 +108,8 @@ describe("config", () => {
       assert.isTrue(cfg.verifySsl, "verifySsl must not be disabled by repo .env.local");
       assert.equal(cfg.server.rateLimitPerMin, DEFAULTS().server.rateLimitPerMin, "rate limit must not be neutered by repo .env.local");
       assert.equal(cfg.server.maxPingpongTurns, DEFAULTS().server.maxPingpongTurns, "anti-loop cap must not be raised by repo .env.local");
+      assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo .env.local");
+      assert.equal(cfg.server.childTranscriptRetentionDays, DEFAULTS().server.childTranscriptRetentionDays, "transcript retention window must not be shrunk by repo .env.local");
       assert.isFalse(cfg.discovery.mdns.enabled, "mDNS must not be force-enabled by repo .env.local");
       assert.equal(cfg.server.port, 7777, "non-security keys still honored from cwd .env.local");
     });

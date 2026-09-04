@@ -38,6 +38,14 @@
   for user cancellation. `TASK_STATE_COMPLETED` is reserved for turns that
   actually finished, and a canceled task's state is no longer clobbered back
   to COMPLETED by a runner that returns normally on abort.
+- **Child-transcript env keys are now security-guarded.** `A2A_CHILD_TRANSCRIPTS`
+  and `A2A_CHILD_TRANSCRIPT_RETENTION_DAYS` were missing from
+  `SECURITY_ENV_KEYS`, so a repo-controlled `.env.local` on the cwd→root walk
+  could disable transcript persistence or shrink the retention window to
+  destroy dispatch evidence. Both keys are now stripped like the other
+  security-relevant keys — honored only from the process env and the
+  operator's global Pi dir — and the repo-`.env.local` injection-guard test
+  covers them (PR #36 review).
 
 ## 0.7.6 (2026-09-01)
 
