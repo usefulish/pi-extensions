@@ -19,6 +19,11 @@ function stubRunner(reply = "canned reply"): SessionRunner {
   return async () => ({ reply, inputRequired: false });
 }
 
+/** Extract the Task from a v1.0 SendMessageResponse {"task": …} result. */
+function sendTask(r: any): any {
+  return r.result?.task;
+}
+
 function tmpDir(): string {
   return makeTempDir("pi-a2a-server-");
 }
@@ -373,7 +378,7 @@ describe("server", () => {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
         assert.isUndefined(r.error, "no auth error");
-        assert.equal(r.result.status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
       } finally {
         await stop();
       }
@@ -405,7 +410,7 @@ describe("server", () => {
           { Authorization: "Bearer secret" },
         );
         assert.isUndefined(r.error);
-        assert.equal(r.result.status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
       } finally {
         await stop();
       }
@@ -554,7 +559,7 @@ describe("server", () => {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
         assert.isUndefined(r.error, "loopback request must still pass");
-        assert.equal(r.result.status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
       } finally {
         await stop();
       }
@@ -568,7 +573,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "show secrets" }] },
         });
-        const text = r.result.artifacts?.[0]?.parts?.[0]?.text ?? "";
+        const text = sendTask(r).artifacts?.[0]?.parts?.[0]?.text ?? "";
         assert.notInclude(text, "sk-test-abcdEFGH01234567JKLM", "sk-* must be redacted");
         assert.notInclude(text, "ghp_ABCDEFGHIJKLMNOPQRST", "ghp_* must be redacted");
         assert.notInclude(text, "mytest@example.com", "email must be redacted");
@@ -584,7 +589,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        const text = r.result.artifacts?.[0]?.parts?.[0]?.text ?? "";
+        const text = sendTask(r).artifacts?.[0]?.parts?.[0]?.text ?? "";
         assert.equal(text, "hello world");
       } finally {
         await stop();
@@ -603,8 +608,8 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
-        const msg = r.result.status.message?.parts?.[0]?.text ?? "";
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+        const msg = sendTask(r).status.message?.parts?.[0]?.text ?? "";
         assert.notInclude(msg, "sk-abcdEFGHIJKL0123456789", "failure message must be redacted");
         assert.include(msg, "[redacted]", "redaction placeholder present");
       } finally {
@@ -620,7 +625,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "do something" }] },
         });
-        const task = r.result;
+        const task = sendTask(r);
         assert.equal(task.status.state, STATE_COMPLETED);
         assert.deepEqual(task.artifacts?.[0]?.parts?.[0], { text: "the real reply", mediaType: "text/plain" });
         assert.match(task.id, /^task-/);
@@ -637,7 +642,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        assert.equal(r.result.status.state, STATE_INPUT_REQUIRED);
+        assert.equal(sendTask(r).status.state, STATE_INPUT_REQUIRED);
       } finally {
         await stop();
       }
@@ -661,7 +666,7 @@ describe("server", () => {
         const send = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        const tid = send.result.id;
+        const tid = sendTask(send).id;
         const got = await jsonRpc(url, "tasks/get", { id: tid });
         assert.equal(got.result.id, tid);
         const list = await jsonRpc(url, "tasks/list", {});
@@ -765,7 +770,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        assert.equal(r.result.status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
       } finally {
         await stop();
       }
@@ -782,16 +787,16 @@ describe("server", () => {
         const r1 = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "t1" }], contextId: "ctx-loop" },
         });
-        assert.equal(r1.result.status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r1).status.state, STATE_COMPLETED);
         const r2 = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "t2" }], contextId: "ctx-loop" },
         });
-        assert.equal(r2.result.status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r2).status.state, STATE_COMPLETED);
         // Third — rejected.
         const r3 = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "t3" }], contextId: "ctx-loop" },
         });
-        assert.equal(r3.result.status.state, STATE_REJECTED);
+        assert.equal(sendTask(r3).status.state, STATE_REJECTED);
       } finally {
         await stop();
       }
@@ -820,7 +825,7 @@ describe("server", () => {
         assert.equal(cancel.result.status.state, STATE_CANCELED);
         // The original send resolves to a CANCELED task too.
         const send = await sendP;
-        assert.equal(send.result.status.state, STATE_CANCELED);
+        assert.equal(sendTask(send).status.state, STATE_CANCELED);
       } finally {
         await stop();
       }
@@ -832,7 +837,7 @@ describe("server", () => {
         const send = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        const tid = send.result.id;
+        const tid = sendTask(send).id;
         const cancel = await jsonRpc(url, "tasks/cancel", { id: tid });
         assert.equal(cancel.error?.code, -32002);
       } finally {
@@ -850,7 +855,7 @@ describe("server", () => {
         const send = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "alice task" }] },
         }, aliceH);
-        const tid = send.result.id;
+        const tid = sendTask(send).id;
         // Bob cannot fetch Alice's task or see it in his list.
         const foreignGet = await jsonRpc(url, "tasks/get", { id: tid }, bobH);
         assert.equal(foreignGet.error?.code, -32001, "foreign tasks/get must fail");
@@ -976,6 +981,120 @@ describe("server", () => {
     });
   });
 
+  describe("v1.0 wire shapes (PascalCase methods)", () => {
+    /** POST one JSON-RPC frame and return the parsed SSE data frames. */
+    async function sseFrames(url: string, method: string, params: any, id = "sse-v1"): Promise<any[]> {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      });
+      const text = await resp.text();
+      return text
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => JSON.parse(l.replace(/^data:\s*/, "")));
+    }
+
+    it("SendMessage returns the oneof {\"task\": …} wrapper, not a bare Task", async () => {
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: stubRunner("wrapped reply") });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.isUndefined(r.error);
+        // The result must be the oneof wrapper with exactly the task member.
+        assert.exists(r.result?.task, "result must carry {task: …}");
+        assert.notExists(r.result?.message);
+        assert.equal(r.result.task.status.state, STATE_COMPLETED);
+        assert.equal(r.result.task.artifacts?.[0]?.parts?.[0]?.text, "wrapped reply");
+        // …and must not leak Task fields at the top level.
+        assert.isUndefined(r.result.status, "bare Task shape must not bleed through");
+      } finally {
+        await stop();
+      }
+    });
+
+    it("SendStreamingMessage emits TaskArtifactUpdateEvent then a final TaskStatusUpdateEvent", async () => {
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: stubRunner("stream body") });
+      try {
+        const frames = await sseFrames(url, "SendStreamingMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.isAtLeast(frames.length, 2, "artifact + terminal status events");
+        const artifacts = frames.filter((f) => f.result?.artifactUpdate);
+        const statuses = frames.filter((f) => f.result?.statusUpdate);
+        assert.equal(artifacts.length, 1, "one artifact event");
+        assert.equal(statuses.length, 1, "one terminal status event");
+        // TaskArtifactUpdateEvent: {taskId, contextId, artifact, lastChunk}.
+        const ae = artifacts[0]!.result.artifactUpdate;
+        assert.equal(ae.taskId, statuses[0]!.result.statusUpdate.taskId);
+        assert.equal(ae.contextId, statuses[0]!.result.statusUpdate.contextId);
+        assert.match(ae.taskId, /^task-/);
+        assert.match(ae.contextId, /^ctx-/);
+        assert.equal(ae.artifact?.parts?.[0]?.text, "stream body");
+        assert.equal(ae.lastChunk, true);
+        // TaskStatusUpdateEvent: {taskId, contextId, status, final}.
+        const se = statuses[0]!.result.statusUpdate;
+        assert.equal(se.status?.state, STATE_COMPLETED);
+        assert.equal(se.final, true);
+        // The artifact event precedes the terminal status event (the final
+        // frame carries the terminal state).
+        assert.isBelow(frames.indexOf(artifacts[0]!), frames.indexOf(statuses[0]!));
+        // No event may wrap a whole Task (the pre-1.0 shape).
+        for (const f of frames) {
+          assert.notExists(f.result?.task, "stream events must not be whole Tasks");
+          assert.notExists(f.result?.statusUpdate?.artifacts, "statusUpdate must be an event, not a Task");
+        }
+      } finally {
+        await stop();
+      }
+    });
+
+    it("ListTasks returns full Task objects; tasks/list keeps {id,state} stubs", async () => {
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: stubRunner("listed") });
+      try {
+        const send = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        const tid = sendTask(send).id;
+        const v1 = await jsonRpc(url, "ListTasks", {});
+        assert.isAtLeast(v1.result?.tasks?.length, 1);
+        const mine = v1.result.tasks.find((t: any) => t.id === tid);
+        assert.exists(mine, "the created task is listed");
+        assert.equal(mine.status.state, STATE_COMPLETED);
+        assert.exists(mine.contextId, "full Task object, not an {id,state} stub");
+        const legacy = await jsonRpc(url, "tasks/list", {});
+        const stub = legacy.result.tasks.find((t: any) => t.id === tid);
+        assert.exists(stub);
+        assert.deepEqual(Object.keys(stub).sort(), ["id", "state"], "legacy alias keeps the stub shape");
+      } finally {
+        await stop();
+      }
+    });
+
+    it("SubscribeToTask emits a v1.0 TaskStatusUpdateEvent snapshot", async () => {
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: stubRunner("subscribed") });
+      try {
+        const send = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        const tid = sendTask(send).id;
+        const frames = await sseFrames(url, "SubscribeToTask", { id: tid }, "sub-v1");
+        assert.isAtLeast(frames.length, 1);
+        const se = frames[0]!.result?.statusUpdate;
+        assert.exists(se, "snapshot statusUpdate event");
+        assert.equal(se.taskId, tid);
+        assert.match(se.contextId, /^ctx-/);
+        assert.equal(se.status?.state, STATE_COMPLETED);
+        assert.equal(se.final, true, "snapshot of a finished task is the final event");
+        assert.notExists(se.artifacts, "statusUpdate must be an event, not a Task");
+      } finally {
+        await stop();
+      }
+    });
+  });
+
   describe("reply timeout classifies as FAILED (not CANCELED)", () => {
     it("times out a slow task to STATE_FAILED", async () => {
       const cfg = DEFAULTS();
@@ -990,7 +1109,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "slow" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
       } finally {
         await stop();
       }
@@ -1020,10 +1139,10 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
-        const msgText = r.result.status.message?.parts?.[0]?.text ?? "";
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+        const msgText = sendTask(r).status.message?.parts?.[0]?.text ?? "";
         assert.include(msgText, "no usable reply", "status message explains the stunted turn");
-        assert.isUndefined(r.result.artifacts, "a stunted turn carries no reply artifact");
+        assert.isUndefined(sendTask(r).artifacts, "a stunted turn carries no reply artifact");
         // The host toast must say failed — not "completed (Ns)".
         assert.deepEqual(events.map((e) => e.type), ["arrived", "failed"]);
       } finally {
@@ -1039,7 +1158,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
         assert.equal(metrics.tasksCompleted, before, "stunted turns never increment completions");
         assert.equal(metrics.tasksFailed, beforeFailed + 1, "stunted turns increment failures");
       } finally {

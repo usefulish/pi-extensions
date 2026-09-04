@@ -29,11 +29,15 @@ import {
   buildAgentCard,
   buildTask,
   extractText,
+  artifactUpdateEvent,
   jsonrpcError,
   jsonrpcResult,
   newContextId,
   newTaskId,
   normalizeRole,
+  sendTaskResponse,
+  statusUpdateEvent,
+  TERMINAL_STATES,
   uuid,
   type AgentCard,
   type AgentSkill,
@@ -808,6 +812,10 @@ export class A2AServer {
 
     // Normalize method aliases (v1.0 PascalCase ↔ pre-1.0 path).
     const norm = method.toLowerCase().replace(/[/_.-]/g, "");
+    // v1.0 methods ("SendMessage", "ListTasks", …) speak the v1.0 wire shapes;
+    // the pre-1.0 aliases ("message/send", "tasks/list", …) keep the legacy
+    // shapes old peers were built against.
+    const isV1 = (v1Norm: string): boolean => norm === v1Norm;
 
     if (norm === "messagesend" || norm === "sendmessage") {
       // Concurrency cap: reject when too many tasks are already running.
@@ -819,10 +827,12 @@ export class A2AServer {
         );
       }
       const r = await this.messageSend(params, identity);
-      return this.send(res, 200, jsonrpcResult(id, r));
+      // A2A v1.0: the SendMessage result is the oneof {"task": …} | {"message": …},
+      // never a bare Task; the pre-1.0 alias keeps returning the bare Task.
+      return this.send(res, 200, jsonrpcResult(id, isV1("sendmessage") ? sendTaskResponse(r) : r));
     }
     if (norm === "messagestream" || norm === "sendstreamingmessage") {
-      return this.messageStream(params, identity, res, id);
+      return this.messageStream(params, identity, res, id, isV1("sendstreamingmessage"));
     }
     if (norm === "tasksget" || norm === "gettask") {
       const st = this.store.get(String(params.id ?? ""));
@@ -833,8 +843,11 @@ export class A2AServer {
     }
     if (norm === "taskslist" || norm === "listtasks") {
       // Per-identity ownership (#10): only the caller's own tasks are listed.
-      const all = this.store.list().filter((t) => this.store.get(t.id)?.identity === identity).map((t) => ({ id: t.id, state: t.status.state }));
-      return this.send(res, 200, jsonrpcResult(id, { tasks: all }));
+      const mine = this.store.list().filter((t) => this.store.get(t.id)?.identity === identity);
+      // A2A v1.0: ListTasksResponse carries full Task objects; the pre-1.0
+      // alias keeps the {id, state} stubs it always returned.
+      const tasks = isV1("listtasks") ? mine : mine.map((t) => ({ id: t.id, state: t.status.state }));
+      return this.send(res, 200, jsonrpcResult(id, { tasks }));
     }
     if (norm === "taskscancel" || norm === "canceltask") {
       const st = this.store.get(String(params.id ?? ""));
@@ -854,7 +867,7 @@ export class A2AServer {
     }
     if (norm === "taskssubscribe" || norm === "subscribetotask") {
       // Resubscribe via SSE — same shape as message/stream.
-      return this.taskSubscribe(params, identity, res, id);
+      return this.taskSubscribe(params, identity, res, id, isV1("subscribetotask"));
     }
     return this.send(res, 200, jsonrpcError(id, -32601, `method not found: ${method}`));
   }
@@ -976,7 +989,7 @@ export class A2AServer {
     }
   }
 
-  private messageStream(params: any, identity: string, res: ServerResponse, id: any): void {
+  private messageStream(params: any, identity: string, res: ServerResponse, id: any, v1 = false): void {
     // Concurrency cap: same gate as message/send. Streaming has already sent
     // 200 + headers, so we emit a JSON-RPC error frame and close the stream.
     if (this.running >= this.cfg.server.maxConcurrent) {
@@ -1026,9 +1039,20 @@ export class A2AServer {
 
     this.messageSend(params, identity, disconnect.signal)
       .then((task) => {
-        writeSse({ statusUpdate: task });
-        if (task.artifacts) {
-          for (const a of task.artifacts) writeSse({ artifactUpdate: a });
+        if (v1) {
+          // A2A v1.0: TaskArtifactUpdateEvents deliver the content, then the
+          // terminal TaskStatusUpdateEvent closes the interaction — the last
+          // frame carries taskId/contextId/state, so a client reading only the
+          // final event still learns the identifiers.
+          for (const a of task.artifacts ?? []) writeSse(artifactUpdateEvent(task, a));
+          writeSse(statusUpdateEvent(task, true));
+        } else {
+          // Pre-1.0 alias keeps the legacy shapes (whole Task as statusUpdate,
+          // bare artifact as artifactUpdate).
+          writeSse({ statusUpdate: task });
+          if (task.artifacts) {
+            for (const a of task.artifacts) writeSse({ artifactUpdate: a });
+          }
         }
       })
       .catch((e: any) => writeErr(-32603, e?.message || String(e)))
@@ -1042,7 +1066,7 @@ export class A2AServer {
       });
   }
 
-  private taskSubscribe(params: any, identity: string, res: ServerResponse, id: any): void {
+  private taskSubscribe(params: any, identity: string, res: ServerResponse, id: any, v1 = false): void {
     const taskId = String(params.id ?? "");
     const st = this.store.get(taskId);
     // Ownership check (#10) BEFORE writing the SSE head, so a foreign peer gets
@@ -1079,12 +1103,16 @@ export class A2AServer {
       res.end();
       return;
     }
-    writeSse({ statusUpdate: st.task });
+    // v1.0: a TaskStatusUpdateEvent {taskId, contextId, status, final}; the
+    // pre-1.0 alias keeps the legacy whole-Task shape. A snapshot of an
+    // already-finished task is the final event of this stream.
+    writeSse(v1 ? statusUpdateEvent(st.task, st.done) : { statusUpdate: st.task });
     if (st.done) {
       res.end();
       return;
     }
-    const watcher = (t: Task): void => writeSse({ statusUpdate: t });
+    const watcher = (t: Task): void =>
+      writeSse(v1 ? statusUpdateEvent(t, TERMINAL_STATES.has(t.status.state)) : { statusUpdate: t });
     st.subscribeWatchers.push(watcher);
     const interval = setInterval(() => {
       if (st.done) {

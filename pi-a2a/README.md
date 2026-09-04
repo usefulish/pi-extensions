@@ -478,7 +478,14 @@ works out of the box:
 
 ## Protocol compliance
 
-Implements the A2A Protocol v1.0 JSON-RPC binding:
+Implements the A2A Protocol v1.0 JSON-RPC binding. v1.0 method names
+(`SendMessage`, `SendStreamingMessage`, `GetTask`, `ListTasks`, `CancelTask`,
+`SubscribeToTask`) speak the v1.0 wire shapes — `SendMessage` replies with the
+oneof `{"task": …}` / `{"message": …}` wrapper, streaming emits
+`TaskStatusUpdateEvent` / `TaskArtifactUpdateEvent` frames, and `ListTasks`
+returns full `Task` objects. The pre-1.0 path aliases (`message/send`,
+`message/stream`, `tasks/get`, …) keep the legacy wire shapes (bare `Task`
+results, `{id, state}` list stubs) so existing peers see no change.
 
 | Feature | Status |
 |---------|--------|
