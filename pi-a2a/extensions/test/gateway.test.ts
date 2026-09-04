@@ -7,10 +7,10 @@
 
 import { assert } from "chai";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import { DEFAULTS } from "./helpers";
+import { makeTempDir } from "./tmp";
 import { GatewayUpstream, isSelfEntry, mergeGatewayPeers } from "../lib/gateway";
 import { resolvePeer, setGatewayPeers, getGatewayPeers, updateGatewayPeers, type Peer } from "../lib/config";
 import { a2aCall, metrics } from "../lib/client";
@@ -293,7 +293,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("PATCH 403 (revoked peer) does NOT fall back to POST", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
       fs.writeFileSync(path.join(dir, "a2a_gateways", "k1.json"), JSON.stringify({ name: "self-1", callerToken: "revoked-ct" }));
       const original = globalThis.fetch;
@@ -326,7 +326,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("PATCH 409 (takeover mid-heartbeat) fails the beat — no rename, no POST", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
       fs.mkdirSync(path.join(dir, "a2a_gateways", "k1"), { recursive: true });
       fs.writeFileSync(path.join(dir, "a2a_gateways", "k1", "self-1.json"), JSON.stringify({ name: "self-1", callerToken: "live-ct" }));
@@ -404,7 +404,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("409 self-heal renames → token persists under the RENAMED path, next session PATCHes with it", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       const original = globalThis.fetch;
       const seen: Array<{ method: string; auth?: string; name: string; cardName?: string }> = [];
       globalThis.fetch = (async (url: any, init?: any) => {
@@ -514,7 +514,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("persisted caller_token → fresh GatewayUpstream heartbeats with PATCH immediately", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
       fs.writeFileSync(
         path.join(dir, "a2a_gateways", "k1.json"),
@@ -553,7 +553,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("PATCH 401 (stale token) → fallback POST re-mints and re-persists", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
       const legacyStateFile = path.join(dir, "a2a_gateways", "k1.json");
       const stateFile = path.join(dir, "a2a_gateways", "k1", "self-1.json");
@@ -600,7 +600,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("rejected caller_token (401, no re-mint) is cleared — overlay falls back to shared token", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
       fs.writeFileSync(
         path.join(dir, "a2a_gateways", "k1.json"),
@@ -647,7 +647,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("PATCH 404 (entry deleted) → POST fallback re-registers in the same beat", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
       fs.writeFileSync(
         path.join(dir, "a2a_gateways", "k1.json"),
@@ -688,7 +688,7 @@ describe("gateway peer discovery", () => {
 
     it("corrupt or foreign-name state file is ignored — POST mints from scratch", async () => {
       for (const content of ["not-json{", JSON.stringify({ name: "other", callerToken: "x" })]) {
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+        const dir = makeTempDir("pi-a2a-state-");
         fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
         fs.writeFileSync(path.join(dir, "a2a_gateways", "k1.json"), content);
         const original = globalThis.fetch;
@@ -721,7 +721,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("keeps caller tokens for concurrent peer names separate", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       const original = globalThis.fetch;
       const seen: string[] = [];
       globalThis.fetch = (async (url: any, init?: any) => {
@@ -751,7 +751,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("deregisters with its caller token", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       fs.mkdirSync(path.join(dir, "a2a_gateways"), { recursive: true });
       fs.writeFileSync(path.join(dir, "a2a_gateways", "k1.json"), JSON.stringify({ name: "self-1", callerToken: "ct-self-1" }));
       const original = globalThis.fetch;
@@ -776,7 +776,7 @@ describe("gateway peer discovery", () => {
     });
 
     it("initial POST 409 (stale name) self-heals with a unique name", async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-state-"));
+      const dir = makeTempDir("pi-a2a-state-");
       const original = globalThis.fetch;
       const posts: string[] = [];
       globalThis.fetch = (async (url: any, init?: any) => {
@@ -864,7 +864,7 @@ describe("gateway peer discovery", () => {
           200,
         );
       }) as any;
-      const piDir2 = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-lan-"));
+      const piDir2 = makeTempDir("pi-a2a-lan-");
       const out = await a2aCall({ cfg: { ...DEFAULTS(), discovery: { ...(DEFAULTS() as any).discovery, gateway: { url: "http://192.168.1.50:9920", token: TOKEN } } } as any, piDir: piDir2, agent: "gw/k1/p", message: "hi" });
       globalThis.fetch = of as any;
       assert.include(out, "lan ok");
@@ -876,7 +876,7 @@ describe("gateway peer discovery", () => {
 
     beforeEach(() => {
       originalFetch = globalThis.fetch;
-      piDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-a2a-gateway-"));
+      piDir = makeTempDir("pi-a2a-gateway-");
       metrics.reset();
     });
     afterEach(() => {
