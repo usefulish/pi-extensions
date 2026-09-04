@@ -16,7 +16,7 @@ write flag files, or persist anything.
 | Level | Trigger | What change |
 |-------|---------|-------------|
 | **Lite** | `/ponytail lite` | Build what's asked, name the lazier alternative in one line. |
-| **Full** | `/ponytail` | The ladder enforced: YAGNI → stdlib → native → one line → minimum. Default. |
+| **Full** | `/ponytail full` | The ladder enforced: YAGNI → stdlib → native → one line → minimum. Default. |
 | **Ultra** | `/ponytail ultra` | YAGNI extremist. Deletion before addition. Challenges requirements before building. |
 
 Level sticks until changed or session end.
@@ -25,7 +25,7 @@ Level sticks until changed or session end.
 
 | Skill | Trigger | What it does |
 |-------|---------|--------------|
-| **ponytail** | `/ponytail` | Lazy mode itself. Simplest solution that works. |
+| **ponytail** | `/ponytail status` | Current level and default. Change level with `/ponytail <mode>`. |
 | **ponytail-review** | `/skill:ponytail-review` | Over-engineering review: `L42: yagni: factory, one product. Inline.` |
 | **ponytail-audit** | `/skill:ponytail-audit` | Whole-repo over-engineering audit: ranked list of what to delete. |
 | **ponytail-debt** | `/skill:ponytail-debt` | Harvest `ponytail:` shortcut comments into a tracked ledger. |
@@ -37,7 +37,7 @@ and OpenCode can use `/skill:<name>` for one-shot skills.
 
 ## Deactivate
 
-Say "stop ponytail" or "normal mode". Resume anytime with `/ponytail`.
+Say "stop ponytail" or "normal mode". Resume anytime with `/ponytail <mode>` (e.g. `/ponytail full`).
 `/ponytail off` also works.
 
 ## Configure Default Mode
@@ -55,7 +55,7 @@ export PONYTAIL_DEFAULT_MODE=ultra
 ```
 
 Set `"off"` to disable auto-activation on session start, activate manually
-with `/ponytail` when wanted.
+with `/ponytail <mode>` when wanted.
 
 Resolution: env var > config file > `full`.
 
