@@ -1151,9 +1151,9 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
         // The ack must NOT wait for the 300ms runner — that is the whole point
         // of non-blocking dispatch (the caller envelope stops bounding the run).
         assert.isBelow(ackMs, 200, `ack took ${ackMs}ms; runner should still be pending`);
-        assert.equal(r.result.status.state, STATE_WORKING);
-        assert.match(r.result.id, /^task-/);
-        const task = await pollTask(url, r.result.id);
+        assert.equal(sendTask(r).status.state, STATE_WORKING);
+        assert.match(sendTask(r).id, /^task-/);
+        const task = await pollTask(url, sendTask(r).id);
         assert.equal(task.status.state, STATE_COMPLETED);
         assert.equal(task.artifacts?.[0]?.parts?.[0]?.text, "done eventually");
       } finally {
@@ -1177,8 +1177,8 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
           configuration: { return_immediately: true },
         });
-        assert.equal(r.result.status.state, STATE_WORKING);
-        const task = await pollTask(url, r.result.id);
+        assert.equal(sendTask(r).status.state, STATE_WORKING);
+        const task = await pollTask(url, sendTask(r).id);
         assert.equal(task.status.state, STATE_COMPLETED);
       } finally {
         await stop();
@@ -1202,8 +1202,8 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
           message: { role: "ROLE_USER", parts: [{ text: "outlive the window" }] },
           configuration: { returnImmediately: true },
         });
-        assert.equal(r.result.status.state, STATE_WORKING);
-        const task = await pollTask(url, r.result.id, 6000);
+        assert.equal(sendTask(r).status.state, STATE_WORKING);
+        const task = await pollTask(url, sendTask(r).id, 6000);
         assert.equal(task.status.state, STATE_COMPLETED);
         assert.equal(task.artifacts?.[0]?.parts?.[0]?.text, "survived the reply window");
       } finally {
@@ -1229,8 +1229,8 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
           message: { role: "ROLE_USER", parts: [{ text: "hang" }] },
           configuration: { returnImmediately: true },
         });
-        assert.equal(r.result.status.state, STATE_WORKING);
-        const task = await pollTask(url, r.result.id, 4000);
+        assert.equal(sendTask(r).status.state, STATE_WORKING);
+        const task = await pollTask(url, sendTask(r).id, 4000);
         assert.equal(task.status.state, STATE_FAILED);
         assert.match(task.status.message?.parts?.[0]?.text ?? "", /async timeout.*detached-task window/);
       } finally {
@@ -1249,10 +1249,10 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
           message: { role: "ROLE_USER", parts: [{ text: "cancel me" }] },
           configuration: { returnImmediately: true },
         });
-        assert.equal(r.result.status.state, STATE_WORKING);
-        const c = await jsonRpc(url, "tasks/cancel", { id: r.result.id });
+        assert.equal(sendTask(r).status.state, STATE_WORKING);
+        const c = await jsonRpc(url, "tasks/cancel", { id: sendTask(r).id });
         assert.equal(c.result.status.state, STATE_CANCELED);
-        const task = await pollTask(url, r.result.id);
+        const task = await pollTask(url, sendTask(r).id);
         assert.equal(task.status.state, STATE_CANCELED);
       } finally {
         await stop();
@@ -1269,7 +1269,7 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
           message: { role: "ROLE_USER", parts: [{ text: "will fail" }] },
           configuration: { returnImmediately: true },
         });
-        const task = await pollTask(url, r.result.id);
+        const task = await pollTask(url, sendTask(r).id);
         assert.equal(task.status.state, STATE_FAILED);
         assert.match(task.status.message?.parts?.[0]?.text ?? "", /worker exploded/);
       } finally {
@@ -1308,8 +1308,8 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
           message: { role: "ROLE_USER", parts: [{ text: "will fail" }] },
           configuration: { returnImmediately: true },
         });
-        assert.equal(r.result.status.state, STATE_WORKING);
-        const task = await pollTask(url, r.result.id);
+        assert.equal(sendTask(r).status.state, STATE_WORKING);
+        const task = await pollTask(url, sendTask(r).id);
         assert.equal(task.status.state, STATE_FAILED);
         assert.match(task.status.message?.parts?.[0]?.text ?? "", /worker exploded/);
         // The poll above let the event loop turn; any unhandled rejection
@@ -1337,8 +1337,8 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "spoof attempt" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
-        const msg = r.result.status.message?.parts?.[0]?.text ?? "";
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+        const msg = sendTask(r).status.message?.parts?.[0]?.text ?? "";
         assert.equal(msg, "reply timeout: this text lies");
         assert.notInclude(msg, "window");
       } finally {
@@ -1361,8 +1361,8 @@ assert.equal(sendTask(r).status.state, STATE_FAILED);
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "slow but allowed" }] },
         });
-        assert.equal(r.result.status.state, STATE_COMPLETED);
-        assert.equal(r.result.artifacts?.[0]?.parts?.[0]?.text, "outlived a zero window");
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r).artifacts?.[0]?.parts?.[0]?.text, "outlived a zero window");
       } finally {
         await stop();
       }
