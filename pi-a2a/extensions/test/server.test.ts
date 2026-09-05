@@ -1203,7 +1203,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
       } finally {
         (globalThis as any).setTimeout = origSetTimeout;
         (globalThis as any).clearTimeout = origClearTimeout;
@@ -1241,10 +1241,10 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
-        const msgText = r.result.status.message?.parts?.[0]?.text ?? "";
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+        const msgText = sendTask(r).status.message?.parts?.[0]?.text ?? "";
         assert.include(msgText, "reply timeout", "status message names the timeout");
-        assert.isUndefined(r.result.artifacts, "an aborted task carries no reply artifact");
+        assert.isUndefined(sendTask(r).artifacts, "an aborted task carries no reply artifact");
         // The host toast must say failed — not "completed (Ns)".
         assert.deepEqual(events.map((e) => e.type), ["arrived", "failed"]);
       } finally {
@@ -1265,7 +1265,7 @@ describe("server", () => {
         await jsonRpc(url, "tasks/cancel", { id: tid });
         const send = await sendP;
         // The success path used to clobber the cancel handler's CANCELED.
-        assert.equal(send.result.status.state, STATE_CANCELED);
+        assert.equal(sendTask(send).status.state, STATE_CANCELED);
       } finally {
         await stop();
       }
@@ -1284,8 +1284,8 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        assert.equal(r.result.status.state, STATE_COMPLETED);
-        assert.equal(seenTaskId, r.result.id, "runner receives the task's own A2A id");
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
+        assert.equal(seenTaskId, sendTask(r).id, "runner receives the task's own A2A id");
         assert.match(seenTaskId ?? "", /^task-/);
       } finally {
         await stop();
@@ -1305,7 +1305,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        assert.equal(r.result.status.state, STATE_COMPLETED);
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
         const lines = fs
           .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
           .split("\n")
@@ -1313,7 +1313,7 @@ describe("server", () => {
           .map((l) => JSON.parse(l));
         const tp = lines.find((l) => l.transcript);
         assert.ok(tp, "a transcript audit line exists");
-        assert.equal(tp.taskId, r.result.id);
+        assert.equal(tp.taskId, sendTask(r).id);
         assert.equal(tp.transcript, "/tmp/a2a_sessions/20260830T000000_task-abc.jsonl");
         assert.match(tp.preview, /7 steps/);
       } finally {
@@ -1334,7 +1334,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
         const lines = fs
           .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
           .split("\n")
@@ -1374,7 +1374,7 @@ describe("server", () => {
         const r = await jsonRpc(url, "SendMessage", {
           message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
         });
-        assert.equal(r.result.status.state, STATE_FAILED);
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
         const lines = fs
           .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
           .split("\n")
