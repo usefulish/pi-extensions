@@ -325,6 +325,13 @@ function sanitizeRepoA2ASettings(s: any): any {
       "maxPingpongTurns",
       "maxConcurrent",
       "replyTimeoutSec",
+      // Audit-trail parity with SECURITY_ENV_KEYS (A2A_CHILD_TRANSCRIPTS,
+      // A2A_CHILD_TRANSCRIPT_RETENTION_DAYS) — a repo must not be able to
+      // opt its dispatched runs out of the #252 transcript audit trail, nor
+      // move the retention window (aggressive evidence deletion at 0/1 day,
+      // keep-forever disk-fill when raised).
+      "childTranscripts",
+      "childTranscriptRetentionDays",
     ])
       delete srv[k];
     c.server = srv;

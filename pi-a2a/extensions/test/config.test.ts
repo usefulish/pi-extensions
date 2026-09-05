@@ -181,6 +181,8 @@ describe("config", () => {
               maxConcurrent: 1000,
               maxPingpongTurns: 20,
               replyTimeoutSec: 1000000,
+              childTranscripts: false,
+              childTranscriptRetentionDays: 1,
               port: 6001, // non-security key — must survive
             },
             discovery: {
@@ -208,6 +210,8 @@ describe("config", () => {
       assert.equal(cfg.server.rateLimitPerMin, DEFAULTS().server.rateLimitPerMin, "rate limit must not be neutered by repo settings.json");
       assert.equal(cfg.server.maxConcurrent, DEFAULTS().server.maxConcurrent, "concurrency cap must not be raised by repo settings.json");
       assert.equal(cfg.server.maxPingpongTurns, DEFAULTS().server.maxPingpongTurns, "anti-loop cap must not be raised by repo settings.json");
+      assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo settings.json");
+      assert.equal(cfg.server.childTranscriptRetentionDays, DEFAULTS().server.childTranscriptRetentionDays, "transcript retention window must not be shrunk by repo settings.json");
       assert.isFalse(cfg.discovery.mdns.enabled, "mDNS must not be force-enabled by repo settings.json");
       assert.equal(cfg.discovery.enrichCard, DEFAULTS().discovery.enrichCard, "enrichCard must not be forced on by repo settings.json");
       // Repo-sourced peer: callable, but NEVER auto-attached the shared token.
@@ -318,11 +322,13 @@ describe("config", () => {
       assert.isTrue(cfg.server.childTranscripts);
       assert.equal(cfg.server.childTranscriptRetentionDays, 30);
     });
-    it("parses from settings.json", () => {
+    it("parses from the trusted operator settings.json (PI-dir path, not repo .pi/)", () => {
       withIsolatedPiDir((dir) => {
-        fs.mkdirSync(path.join(dir, ".pi"), { recursive: true });
+        // Operator-owned <pi-dir>/settings.json. The sibling repo-strip test
+        // above covers the repo-scope <cwd>/.pi/settings.json channel (these
+        // keys are stripped there), so this case pins the trusted source.
         fs.writeFileSync(
-          path.join(dir, ".pi", "settings.json"),
+          path.join(dir, "settings.json"),
           JSON.stringify({ a2a: { server: { childTranscripts: false, childTranscriptRetentionDays: 7 } } }),
         );
         const cfg = loadConfig({ cwd: dir });
