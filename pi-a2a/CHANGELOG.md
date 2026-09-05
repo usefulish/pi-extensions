@@ -1,5 +1,52 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Dispatched child sessions now persist their transcripts.** Stock
+  pi-a2a ran inbound-task children on `SessionManager.inMemory`, so a
+  dispatched worker that stalled or was killed mid-run left no step history
+  at all — its final A2A reply was the only evidence. The session runner now
+  creates a real `SessionManager` per dispatch, keyed by the A2A task id,
+  writing a full pi session file to `<agentDir>/a2a_sessions/<timestamp>_<taskId>.jsonl`
+  synchronously as the child runs (openable with pi's own session tooling,
+  complete up to the moment of death even on a reply-window kill). The file
+  materializes on the child's first assistant output; a child that dies
+  before any model output leaves no transcript (covered instead by the
+  FAILED task + audit line). The completion/failure audit lines now record
+  the transcript path plus an observed step count (assistant turns + tool
+  executions), so post-mortems can go from audit log or task id straight to
+  the step history. Privacy: transcripts carry everything the worker read —
+  files are `chmod 600` at turn end and bounded by retention; set
+  `a2a.server.childTranscripts: false` for stock in-memory behavior. The
+  host session lineage is preserved via the session header's `parentSession`
+  and an `a2a/dispatch` attribution entry in the file.
+
+### Fixed
+
+- **A reply-window timeout is no longer reported as SUCCESS.** When the
+  inbound reply window expired, the session runner aborted the child session
+  but still resolved normally, so `message/send` took the success path and
+  returned `TASK_STATE_COMPLETED` with a truncated reply artifact — a killed
+  worker and a finished one were indistinguishable at the protocol level. The
+  runner now throws when the abort fired before the turn completed (captured
+  at race settlement, so an abort landing during cleanup does not fail a
+  completed turn), and `messageSend` independently routes any post-abort
+  normal return through the failure classification: `TASK_STATE_FAILED` for a
+  reply-window timeout (with a descriptive status message), `TASK_STATE_CANCELED`
+  for user cancellation. `TASK_STATE_COMPLETED` is reserved for turns that
+  actually finished, and a canceled task's state is no longer clobbered back
+  to COMPLETED by a runner that returns normally on abort.
+- **Child-transcript env keys are now security-guarded.** `A2A_CHILD_TRANSCRIPTS`
+  and `A2A_CHILD_TRANSCRIPT_RETENTION_DAYS` were missing from
+  `SECURITY_ENV_KEYS`, so a repo-controlled `.env.local` on the cwd→root walk
+  could disable transcript persistence or shrink the retention window to
+  destroy dispatch evidence. Both keys are now stripped like the other
+  security-relevant keys — honored only from the process env and the
+  operator's global Pi dir — and the repo-`.env.local` injection-guard test
+  covers them (PR #36 review).
+
 ## 0.7.6 (2026-09-01)
 
 ### Fixed

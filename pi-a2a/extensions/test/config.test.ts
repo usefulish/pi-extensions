@@ -88,6 +88,8 @@ describe("config", () => {
           "A2A_VERIFY_SSL=false",
           "A2A_RATE_LIMIT=1000000",
           "A2A_MAX_PINGPONG_TURNS=20",
+          "A2A_CHILD_TRANSCRIPTS=false",
+          "A2A_CHILD_TRANSCRIPT_RETENTION_DAYS=1",
           "A2A_DISCOVERY_MDNS=true",
           "A2A_ENRICH_CARD=true",
           // Non-security key must still be honored from the cwd file.
@@ -106,6 +108,8 @@ describe("config", () => {
       assert.isTrue(cfg.verifySsl, "verifySsl must not be disabled by repo .env.local");
       assert.equal(cfg.server.rateLimitPerMin, DEFAULTS().server.rateLimitPerMin, "rate limit must not be neutered by repo .env.local");
       assert.equal(cfg.server.maxPingpongTurns, DEFAULTS().server.maxPingpongTurns, "anti-loop cap must not be raised by repo .env.local");
+      assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo .env.local");
+      assert.equal(cfg.server.childTranscriptRetentionDays, DEFAULTS().server.childTranscriptRetentionDays, "transcript retention window must not be shrunk by repo .env.local");
       assert.isFalse(cfg.discovery.mdns.enabled, "mDNS must not be force-enabled by repo .env.local");
       assert.equal(cfg.server.port, 7777, "non-security keys still honored from cwd .env.local");
     });
@@ -177,6 +181,8 @@ describe("config", () => {
               maxConcurrent: 1000,
               maxPingpongTurns: 20,
               replyTimeoutSec: 1000000,
+              childTranscripts: false,
+              childTranscriptRetentionDays: 1,
               port: 6001, // non-security key — must survive
             },
             discovery: {
@@ -204,6 +210,8 @@ describe("config", () => {
       assert.equal(cfg.server.rateLimitPerMin, DEFAULTS().server.rateLimitPerMin, "rate limit must not be neutered by repo settings.json");
       assert.equal(cfg.server.maxConcurrent, DEFAULTS().server.maxConcurrent, "concurrency cap must not be raised by repo settings.json");
       assert.equal(cfg.server.maxPingpongTurns, DEFAULTS().server.maxPingpongTurns, "anti-loop cap must not be raised by repo settings.json");
+      assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo settings.json");
+      assert.equal(cfg.server.childTranscriptRetentionDays, DEFAULTS().server.childTranscriptRetentionDays, "transcript retention window must not be shrunk by repo settings.json");
       assert.isFalse(cfg.discovery.mdns.enabled, "mDNS must not be force-enabled by repo settings.json");
       assert.equal(cfg.discovery.enrichCard, DEFAULTS().discovery.enrichCard, "enrichCard must not be forced on by repo settings.json");
       // Repo-sourced peer: callable, but NEVER auto-attached the shared token.
@@ -305,6 +313,48 @@ describe("config", () => {
           else process.env[k] = v;
         }
       }
+    });
+  });
+
+  describe("server.childTranscripts (#252)", () => {
+    it("defaults to on with a 30-day retention", () => {
+      const cfg = withIsolatedPiDir((dir) => loadConfig({ cwd: dir }));
+      assert.isTrue(cfg.server.childTranscripts);
+      assert.equal(cfg.server.childTranscriptRetentionDays, 30);
+    });
+    it("parses from the trusted operator settings.json (PI-dir path, not repo .pi/)", () => {
+      withIsolatedPiDir((dir) => {
+        // Operator-owned <pi-dir>/settings.json. The sibling repo-strip test
+        // above covers the repo-scope <cwd>/.pi/settings.json channel (these
+        // keys are stripped there), so this case pins the trusted source.
+        fs.writeFileSync(
+          path.join(dir, "settings.json"),
+          JSON.stringify({ a2a: { server: { childTranscripts: false, childTranscriptRetentionDays: 7 } } }),
+        );
+        const cfg = loadConfig({ cwd: dir });
+        assert.isFalse(cfg.server.childTranscripts);
+        assert.equal(cfg.server.childTranscriptRetentionDays, 7);
+      });
+    });
+    it("parses from env A2A_CHILD_TRANSCRIPTS / A2A_CHILD_TRANSCRIPT_RETENTION_DAYS", () => {
+      withIsolatedPiDir((dir) => {
+        const olds: [string, string | undefined][] = [
+          ["A2A_CHILD_TRANSCRIPTS", process.env.A2A_CHILD_TRANSCRIPTS],
+          ["A2A_CHILD_TRANSCRIPT_RETENTION_DAYS", process.env.A2A_CHILD_TRANSCRIPT_RETENTION_DAYS],
+        ];
+        process.env.A2A_CHILD_TRANSCRIPTS = "false";
+        process.env.A2A_CHILD_TRANSCRIPT_RETENTION_DAYS = "14";
+        try {
+          const cfg = loadConfig({ cwd: dir });
+          assert.isFalse(cfg.server.childTranscripts);
+          assert.equal(cfg.server.childTranscriptRetentionDays, 14);
+        } finally {
+          for (const [k, v] of olds) {
+            if (v === undefined) delete process.env[k];
+            else process.env[k] = v;
+          }
+        }
+      });
     });
   });
 

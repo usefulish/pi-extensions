@@ -1,5 +1,7 @@
 import { assert } from "chai";
+import * as fs from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
+import * as path from "node:path";
 
 import { DEFAULTS } from "./helpers";
 import { makeTempDir } from "./tmp";
@@ -1161,6 +1163,226 @@ describe("server", () => {
         assert.equal(sendTask(r).status.state, STATE_FAILED);
         assert.equal(metrics.tasksCompleted, before, "stunted turns never increment completions");
         assert.equal(metrics.tasksFailed, beforeFailed + 1, "stunted turns increment failures");
+      } finally {
+        await stop();
+      }
+    });
+  });
+
+  describe("reply-window timer teardown (#257)", () => {
+    it("clears the reply-window watchdog when the runner throws — no leaked 300s timer", async () => {
+      // Regression (#257): a throwing runner skips the success-path
+      // clearTimeout and never aborts the controller, so the 5-minute
+      // reply-window timer stayed armed after the task reported FAILED —
+      // the task was dead but the timer kept the process's event loop alive
+      // for the full window (the test-suite exit-hang). Every exit path must
+      // clear it.
+      const cfg = DEFAULTS(); // replyTimeoutSec: 300 → watchdog delay 300000ms
+      const windowMs = cfg.server.replyTimeoutSec * 1000;
+      const runner: SessionRunner = async () => {
+        throw new Error("boom");
+      };
+      const { url, stop } = await startServer({ cfg, runner });
+      const origSetTimeout = globalThis.setTimeout;
+      const origClearTimeout = globalThis.clearTimeout;
+      let created = 0;
+      const armed = new Set<ReturnType<typeof setTimeout>>();
+      try {
+        (globalThis as any).setTimeout = (fn: any, delay?: number, ...args: any[]) => {
+          const t = origSetTimeout(fn, delay, ...args);
+          if (delay === windowMs) {
+            created += 1;
+            armed.add(t);
+          }
+          return t;
+        };
+        (globalThis as any).clearTimeout = (t: ReturnType<typeof setTimeout>) => {
+          armed.delete(t);
+          return origClearTimeout(t);
+        };
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+      } finally {
+        (globalThis as any).setTimeout = origSetTimeout;
+        (globalThis as any).clearTimeout = origClearTimeout;
+        await stop();
+      }
+      assert.equal(created, 1, "the reply-window watchdog must be created for the task");
+      assert.equal(armed.size, 0, "reply-window timer must be cleared when the runner throws");
+    });
+  });
+
+  describe("aborted runner returning normally is not COMPLETED (#247)", () => {
+    // The stock session runner resolves its prompt promise on session.abort()
+    // (instead of rejecting) and used to return the truncated reply normally,
+    // which took messageSend's success path: a reply-window kill came back
+    // TASK_STATE_COMPLETED with a partial artifact — indistinguishable from
+    // a finished worker. The server must classify by the abort signal, not
+    // by how the runner happened to return.
+    const partialRunner: SessionRunner = ({ signal }) =>
+      new Promise((resolve) => {
+        // Mimics the stock runner: abort resolves it normally with whatever
+        // partial reply was captured so far.
+        signal.addEventListener(
+          "abort",
+          () => resolve({ reply: "partial work before the window closed", inputRequired: false }),
+          { once: true },
+        );
+      });
+
+    it("maps a reply-window timeout to STATE_FAILED with a timeout status message", async () => {
+      const cfg = DEFAULTS();
+      cfg.server.replyTimeoutSec = 1;
+      const events: any[] = [];
+      const { url, stop } = await startServer({ cfg, runner: partialRunner, onActivity: (a) => events.push(a) });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+        const msgText = sendTask(r).status.message?.parts?.[0]?.text ?? "";
+        assert.include(msgText, "reply timeout", "status message names the timeout");
+        assert.isUndefined(sendTask(r).artifacts, "an aborted task carries no reply artifact");
+        // The host toast must say failed — not "completed (Ns)".
+        assert.deepEqual(events.map((e) => e.type), ["arrived", "failed"]);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("preserves STATE_CANCELED when a canceled runner returns normally", async () => {
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner: partialRunner });
+      try {
+        const sendP = jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        // Let the task start, then cancel it.
+        await new Promise((r) => setTimeout(r, 50));
+        const tasks = await jsonRpc(url, "tasks/list", {});
+        const tid = tasks.result.tasks[0]!.id;
+        await jsonRpc(url, "tasks/cancel", { id: tid });
+        const send = await sendP;
+        // The success path used to clobber the cancel handler's CANCELED.
+        assert.equal(sendTask(send).status.state, STATE_CANCELED);
+      } finally {
+        await stop();
+      }
+    });
+  });
+
+  describe("child transcripts (#252)", () => {
+    it("passes the A2A taskId to the runner", async () => {
+      let seenTaskId: string | undefined;
+      const runner: SessionRunner = async ({ taskId }) => {
+        seenTaskId = taskId;
+        return { reply: "ok", inputRequired: false };
+      };
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
+        assert.equal(seenTaskId, sendTask(r).id, "runner receives the task's own A2A id");
+        assert.match(seenTaskId ?? "", /^task-/);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("audits the transcript path + step count on completion", async () => {
+      const piDir = tmpDir();
+      const runner: SessionRunner = async () => ({
+        reply: "done",
+        inputRequired: false,
+        transcriptPath: "/tmp/a2a_sessions/20260830T000000_task-abc.jsonl",
+        stepCount: 7,
+      });
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner, piDir });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(sendTask(r).status.state, STATE_COMPLETED);
+        const lines = fs
+          .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l));
+        const tp = lines.find((l) => l.transcript);
+        assert.ok(tp, "a transcript audit line exists");
+        assert.equal(tp.taskId, sendTask(r).id);
+        assert.equal(tp.transcript, "/tmp/a2a_sessions/20260830T000000_task-abc.jsonl");
+        assert.match(tp.preview, /7 steps/);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("audits the transcript path when the runner throws (killed worker)", async () => {
+      const piDir = tmpDir();
+      const runner: SessionRunner = async () => {
+        const err = new Error("reply timeout: exceeded the 1800s reply window");
+        (err as any).transcriptPath = "/tmp/a2a_sessions/20260830T000000_task-def.jsonl";
+        (err as any).stepCount = 42;
+        throw err;
+      };
+      const { url, stop } = await startServer({ cfg: DEFAULTS(), runner, piDir });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "hi" }] },
+        });
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+        const lines = fs
+          .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l));
+        const tp = lines.find((l) => l.transcript);
+        assert.ok(tp, "a transcript audit line exists for the failure");
+        assert.match(tp.preview, /42 steps/);
+      } finally {
+        await stop();
+      }
+    });
+
+    it("carries the transcript on the error when an aborted runner returns normally", async () => {
+      // The #247 defense-in-depth path: the runner resolves normally on
+      // abort, and messageSend must reclassify as FAILED — carrying the
+      // transcript forensics onto the classification error.
+      const piDir = tmpDir();
+      const partialRunner: SessionRunner = ({ signal }) =>
+        new Promise((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () =>
+              resolve({
+                reply: "partial",
+                inputRequired: false,
+                transcriptPath: "/tmp/a2a_sessions/20260830T000000_task-ghi.jsonl",
+                stepCount: 3,
+              }),
+            { once: true },
+          );
+        });
+      const cfg = DEFAULTS();
+      cfg.server.replyTimeoutSec = 1;
+      const { url, stop } = await startServer({ cfg, runner: partialRunner, piDir });
+      try {
+        const r = await jsonRpc(url, "SendMessage", {
+          message: { role: "ROLE_USER", parts: [{ text: "long task" }] },
+        });
+        assert.equal(sendTask(r).status.state, STATE_FAILED);
+        const lines = fs
+          .readFileSync(path.join(piDir, "a2a_audit.jsonl"), "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l));
+        const tp = lines.find((l) => l.transcript);
+        assert.ok(tp, "transcript audited despite the post-abort normal return");
+        assert.match(tp.preview, /3 steps/);
       } finally {
         await stop();
       }

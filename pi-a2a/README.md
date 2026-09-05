@@ -80,6 +80,8 @@ Edit `~/.pi/agent/settings.json` under the `a2a` key. Key reference:
 | `server.allowAllUsers` | `false` | Allow any authenticated peer (dev only) |
 | `server.maxConcurrent` | `3` | Max concurrent inbound tasks |
 | `server.replyTimeoutSec` | `300` | Seconds to wait for the agent's reply |
+| `server.childTranscripts` | `true` | Persist each dispatched child session's transcript to `<agentDir>/a2a_sessions/<timestamp>_<taskId>.jsonl` (a real pi session file, openable with pi's session tooling) so stalled/killed workers leave a forensic step history. Off = stock in-memory children |
+| `server.childTranscriptRetentionDays` | `30` | Delete child transcripts older than N days on server start. `0` = keep forever. Transcripts carry everything the worker read — keep the window bounded |
 | `server.maxPingpongTurns` | `5` | Anti-loop turn cap per context (max 20) |
 | `server.rateLimitPerMin` | `60` | Requests/minute per identity |
 | `server.skills` | `[]` | Skills advertised on the Agent Card. When empty (default), skills are **self-discovered** from the live session — no config needed |

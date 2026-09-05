@@ -59,6 +59,7 @@ import {
   wrapInbound,
 } from "./security";
 import { metrics } from "./client";
+import { childTranscriptDir, sweepChildTranscripts } from "./persistence";
 import { heartbeat, register, unregister, type SessionDescriptor } from "./registry";
 import { startBroadcast, startDiscovery, txtRecord, mdnsPeerKey, type MdnsHandle, type MdnsPeer } from "./mdns";
 import type { InboundActivity } from "./activity";
@@ -176,14 +177,30 @@ class RateLimiter {
  * in particular, that the final assistant message carried usable text. A
  * turn that ends on a length stop with no assistant text produced no usable
  * reply and MUST throw, so messageSend maps the task to FAILED instead of
- * completing it with the previous turn's stale text.
+ * completing it with the previous turn's stale text. If the abort signal
+ * fired first, the runner MUST likewise throw — messageSend routes any
+ * normal return after an abort through the failure classification anyway,
+ * and an honest throw carries the real error (timeout vs cancel).
  */
 export interface SessionRunner {
   (opts: {
     message: string;
+    /** A2A task id of this dispatch — the runner keys the persisted child
+     *  session transcript by it (fleet task #252). Absent in tests. */
+    taskId?: string;
     signal: AbortSignal;
     onProgress?: (assistantTextDelta: string) => void;
-  }): Promise<{ reply: string; inputRequired: boolean }>;
+  }): Promise<{
+    reply: string;
+    inputRequired: boolean;
+    /** Path of the persisted child transcript, when the runner wrote one
+     *  (fleet task #252). Audited at completion AND failure so a dead
+     *  worker's step history is discoverable from the audit log alone. */
+    transcriptPath?: string;
+    /** Assistant turns + tool executions the runner observed — with the
+     *  transcript, answers "how far did it get" in a post-mortem (#256). */
+    stepCount?: number;
+  }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -586,6 +603,15 @@ export class A2AServer {
     if (this.http) {
       return { host: resolveBindHost(this.cfg), port: this.boundPort ?? this.cfg.server.port, url: this.publicUrl() };
     }
+    // Retention sweep for child transcripts (fleet task #252): they carry
+    // everything a dispatched worker read, so bound their lifetime. Runs
+    // unconditionally (also cleans up after transcripts were later disabled)
+    // and is best-effort — housekeeping must never block the server.
+    try {
+      sweepChildTranscripts(childTranscriptDir(this.piDir), this.cfg.server.childTranscriptRetentionDays);
+    } catch {
+      /* best-effort */
+    }
     const host = resolveBindHost(this.cfg);
     const configuredPort = this.cfg.server.port;
     const fallback = Math.max(0, this.cfg.server.portFallback);
@@ -909,18 +935,47 @@ export class A2AServer {
 
     this.running += 1;
     const startedAt = Date.now();
+    // Reply-window watchdog. Cleared in the finally below on EVERY exit path:
+    // a runner that throws skips any inline clearTimeout and never aborts the
+    // controller, so without this the timer stayed armed for the full reply
+    // window (default 300s) — the task reported FAILED while the timer kept
+    // the event loop alive (test-suite exit-hang, fleet task #257).
+    let replyTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timeoutMs = this.cfg.server.replyTimeoutSec * 1000;
-      const timer = setTimeout(() => controller.abort(new Error("reply timeout")), timeoutMs);
-      controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+      replyTimer = setTimeout(
+        () =>
+          controller.abort(
+            new Error(
+              `reply timeout: exceeded the ${this.cfg.server.replyTimeoutSec}s reply window — session aborted mid-run, reply is truncated`,
+            ),
+          ),
+        timeoutMs,
+      );
+      controller.signal.addEventListener("abort", () => clearTimeout(replyTimer), { once: true });
       const wrapped = wrapInbound(identity, inboundText);
       const runner = this.requireRunner();
       const out = await runner({
         message: wrapped,
+        taskId,
         signal: controller.signal,
         onProgress: (line) => this.onActivity?.({ type: "progress", taskId, line }),
       });
-      clearTimeout(timer);
+      if (controller.signal.aborted) {
+        // Defense in depth (#247): a runner may return normally even though
+        // its abort signal fired — the stock runner's prompt promise resolves
+        // on session.abort() rather than rejecting, so without this check a
+        // killed worker came back TASK_STATE_COMPLETED with a truncated reply
+        // artifact. COMPLETED must mean the turn actually finished: route any
+        // post-abort return through the failure classification below
+        // (CANCELED for user cancel, FAILED otherwise).
+        const err =
+          controller.signal.reason instanceof Error
+            ? controller.signal.reason
+            : new Error("task aborted before completion");
+        this.attachTranscript(err, out);
+        throw err;
+      }
       const finalState = out.inputRequired ? STATE_INPUT_REQUIRED : STATE_COMPLETED;
       // Outbound redaction: replies cross the trust boundary back to a peer,
       // so scrub credential-shaped substrings (sk-*, ghp_*, bearer …, emails,
@@ -938,6 +993,7 @@ export class A2AServer {
       });
       st.done = true;
       metrics.tasksCompleted += 1;
+      this.auditTranscript(taskId, identity, out.transcriptPath, out.stepCount);
       this.onActivity?.({
         type: "completed",
         taskId,
@@ -950,6 +1006,7 @@ export class A2AServer {
       const aborted = controller.signal.aborted;
       // Distinguish user-initiated cancel (CANCELED) from system timeout/failure (FAILED).
       const state = aborted && st.userCanceled ? STATE_CANCELED : STATE_FAILED;
+      this.auditTranscript(taskId, identity, (e as any)?.transcriptPath, (e as any)?.stepCount);
       this.store.update(taskId, (t) => {
         // Don't clobber a cancel-handler-set CANCELED state with an error message.
         t.status.state = state;
@@ -985,6 +1042,7 @@ export class A2AServer {
       }
       return st.task;
     } finally {
+      if (replyTimer !== undefined) clearTimeout(replyTimer);
       this.running -= 1;
     }
   }
@@ -1127,6 +1185,39 @@ export class A2AServer {
     res.on("close", () => {
       clearInterval(interval);
       st.subscribeWatchers = st.subscribeWatchers.filter((w) => w !== watcher);
+    });
+  }
+
+  /** Stamp transcript forensics (path + step count) onto an error so the
+   *  catch path can audit them — the runner attaches the same fields to the
+   *  errors it throws itself (fleet task #252). */
+  private attachTranscript(err: unknown, out: { transcriptPath?: string; stepCount?: number }): void {
+    if (!out.transcriptPath) return;
+    try {
+      (err as any).transcriptPath = out.transcriptPath;
+      if (out.stepCount !== undefined) (err as any).stepCount = out.stepCount;
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  /** Audit the child transcript's existence at completion/failure so a
+   *  post-mortem can go from audit log (or task id) straight to the step
+   *  history — no guessing where the transcript lives (fleet task #252). */
+  private auditTranscript(
+    taskId: string,
+    identity: string,
+    transcriptPath: string | undefined,
+    stepCount: number | undefined,
+  ): void {
+    if (!transcriptPath) return;
+    audit({
+      piDir: this.piDir,
+      direction: "inbound",
+      identity,
+      taskId,
+      text: `[transcript] ${transcriptPath}${stepCount !== undefined ? ` (${stepCount} steps)` : ""}`,
+      transcriptPath,
     });
   }
 
