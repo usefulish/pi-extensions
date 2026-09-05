@@ -1098,7 +1098,7 @@ export class A2AServer {
       const aborted = controller.signal.aborted;
       // Distinguish user-initiated cancel (CANCELED) from system timeout/failure (FAILED).
       const state = aborted && st.userCanceled ? STATE_CANCELED : STATE_FAILED;
-this.auditTranscript(taskId, identity, (e as any)?.transcriptPath, (e as any)?.stepCount);
+      this.auditTranscript(taskId, identity, (e as any)?.transcriptPath, (e as any)?.stepCount);
       // A supervision timeout's ground truth is the local `timedOut` flag
       // (set by OUR timer callback), never the abort reason's TEXT — the
       // reason carries the descriptive "reply/async timeout: … the Ns window"

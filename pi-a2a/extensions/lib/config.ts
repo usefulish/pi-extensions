@@ -249,7 +249,7 @@ export const SECURITY_ENV_KEYS: ReadonlySet<string> = new Set([
   "A2A_ALLOW_ALL_USERS",
   "A2A_MAX_PINGPONG_TURNS",
   "A2A_RATE_LIMIT",
-"A2A_CHILD_TRANSCRIPTS",
+  "A2A_CHILD_TRANSCRIPTS",
   "A2A_CHILD_TRANSCRIPT_RETENTION_DAYS",
   // Abuse-control parity with sanitizeRepoA2ASettings ("maxConcurrent",
   // "replyTimeoutSec", "asyncTimeoutSec"): a repo must not be able to raise

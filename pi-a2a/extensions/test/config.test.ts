@@ -114,7 +114,7 @@ describe("config", () => {
       assert.isTrue(cfg.verifySsl, "verifySsl must not be disabled by repo .env.local");
       assert.equal(cfg.server.rateLimitPerMin, DEFAULTS().server.rateLimitPerMin, "rate limit must not be neutered by repo .env.local");
       assert.equal(cfg.server.maxPingpongTurns, DEFAULTS().server.maxPingpongTurns, "anti-loop cap must not be raised by repo .env.local");
-assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo .env.local");
+      assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo .env.local");
       assert.equal(cfg.server.childTranscriptRetentionDays, DEFAULTS().server.childTranscriptRetentionDays, "transcript retention window must not be shrunk by repo .env.local");
       assert.equal(cfg.server.maxConcurrent, DEFAULTS().server.maxConcurrent, "concurrency cap must not be raised by repo .env.local");
       assert.equal(cfg.server.replyTimeoutSec, DEFAULTS().server.replyTimeoutSec, "reply window must not be stretched by repo .env.local");
@@ -239,7 +239,7 @@ childTranscripts: false,
       assert.equal(cfg.server.rateLimitPerMin, DEFAULTS().server.rateLimitPerMin, "rate limit must not be neutered by repo settings.json");
       assert.equal(cfg.server.maxConcurrent, DEFAULTS().server.maxConcurrent, "concurrency cap must not be raised by repo settings.json");
       assert.equal(cfg.server.maxPingpongTurns, DEFAULTS().server.maxPingpongTurns, "anti-loop cap must not be raised by repo settings.json");
-assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo settings.json");
+      assert.isTrue(cfg.server.childTranscripts, "childTranscripts must not be disabled by repo settings.json");
       assert.equal(cfg.server.childTranscriptRetentionDays, DEFAULTS().server.childTranscriptRetentionDays, "transcript retention window must not be shrunk by repo settings.json");
       assert.equal(cfg.server.replyTimeoutSec, DEFAULTS().server.replyTimeoutSec, "reply window must not be stretched by repo settings.json");
       assert.equal(cfg.server.asyncTimeoutSec, DEFAULTS().server.asyncTimeoutSec, "detached supervision window must not be stretched by repo settings.json");
